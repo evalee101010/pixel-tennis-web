@@ -10,6 +10,10 @@ python3 -m http.server 4173
 
 Open `http://localhost:4173/`.
 
+## Deploy
+
+See `DEPLOY.md`. The project is static and can be published from the repository root with no build command.
+
 ## Desktop Controls
 
 - Move: `WASD` or arrow keys
