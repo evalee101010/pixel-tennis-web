@@ -184,7 +184,6 @@ const input = {
   hitQueueTimer: 0,
   hitPulse: 0,
   queuedSpecial: false,
-  special: false,
   aim: 0,
   pointerId: null,
   stickPointerId: null,
@@ -329,15 +328,20 @@ window.addEventListener("keydown", (event) => {
   if (key === "d" || key === "arrowright") input.right = true;
   if (key === "w" || key === "arrowup") input.up = true;
   if (key === "s" || key === "arrowdown") input.down = true;
-  if (key === "shift") input.special = true;
   if (key === "r") resetMatch();
   if (key === "p") togglePause();
   if (key === "1") setTheme(0);
   if (key === "2") setTheme(1);
   if (key === "3") setTheme(2);
+  if (key === "e") {
+    if (input.hitArmed) {
+      queueSpecialHit();
+      input.hitArmed = false;
+    }
+  }
   if (key === " " || key === "enter") {
     if (input.hitArmed) {
-      queueHit({ hold: 0, special: input.special });
+      queueHit({ hold: 0, special: false });
       input.hitArmed = false;
     }
   }
@@ -349,8 +353,7 @@ window.addEventListener("keyup", (event) => {
   if (key === "d" || key === "arrowright") input.right = false;
   if (key === "w" || key === "arrowup") input.up = false;
   if (key === "s" || key === "arrowdown") input.down = false;
-  if (key === "shift") input.special = false;
-  if (key === " " || key === "enter") {
+  if (key === " " || key === "enter" || key === "e") {
     input.hit = false;
     input.hitArmed = true;
   }
@@ -373,7 +376,7 @@ canvas.addEventListener("pointerdown", (event) => {
   }
   if (distance2(p.x, p.y, controls.special.x, controls.special.y) < controls.special.hot * controls.special.hot) {
     input.pointerId = event.pointerId;
-    queueHit({ hold: 0.95, special: state.energy >= 100 });
+    queueSpecialHit();
     return;
   }
   input.mouseAim = screenToWorld(p.x, p.y);
@@ -388,7 +391,7 @@ canvas.addEventListener("click", (event) => {
     return;
   }
   if (distance2(p.x, p.y, controls.special.x, controls.special.y) < controls.special.hot * controls.special.hot) {
-    queueHit({ hold: 0.95, special: state.energy >= 100 });
+    queueSpecialHit();
   }
 });
 
@@ -427,8 +430,13 @@ function releasePointer(event) {
     input.pointerId = null;
     input.hit = false;
     input.hitArmed = true;
-    input.special = false;
   }
+}
+
+function queueSpecialHit() {
+  input.hitPulse = 0.18;
+  if (state.energy < 100) return;
+  queueHit({ hold: 0.95, special: true });
 }
 
 function queueHit({ hold = 0, special = false } = {}) {
@@ -727,7 +735,7 @@ function tryPlayerHit() {
   if ((!input.hit && !input.hitQueued) || player.cooldown > 0) return;
   if (!canActorHit(player, 1)) return;
   const quality = hitQuality(player);
-  const useSpecial = (input.special || input.queuedSpecial) && state.energy >= 100;
+  const useSpecial = input.queuedSpecial && state.energy >= 100;
   playerHit(quality, useSpecial);
 }
 

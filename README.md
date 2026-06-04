@@ -20,7 +20,7 @@ See `DEPLOY.md`. The project is static and can be published from the repository 
 - Hit: `Space` or `Enter`
 - Lob: hold up while hitting
 - Drop shot: hold down while hitting
-- Special: `Shift` + hit when the energy bar is full
+- Special: `E` when the energy bar is full
 - Reset: `R`
 - Pause: `P`
 
