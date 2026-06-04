@@ -8,6 +8,18 @@ pixel-tennis-web/
 
 It can be hosted by any static website platform. No build command is required.
 
+Live site:
+
+```text
+https://evalee101010.github.io/pixel-tennis-web/
+```
+
+GitHub repository:
+
+```text
+https://github.com/evalee101010/pixel-tennis-web
+```
+
 ## Recommended Long-Term Flow
 
 1. Keep this folder as its own Git repository.
@@ -44,4 +56,3 @@ If connecting this repository to Netlify:
 - Base directory: empty or project root
 - Build command: empty
 - Publish directory: `.`
-

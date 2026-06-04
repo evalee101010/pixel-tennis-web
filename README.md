@@ -2,6 +2,8 @@
 
 A portrait-first web prototype for the retro tennis game. It is a static Canvas app and can be served from any local web server.
 
+Live site: https://evalee101010.github.io/pixel-tennis-web/
+
 ## Run
 
 ```sh
