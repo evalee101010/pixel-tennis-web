@@ -158,6 +158,8 @@ const state = {
   pausedPhase: null,
   pausedMessage: "",
   pausedMessageSub: "",
+  result: null,
+  resultTime: 0,
   timer: TUNING.match.serveDelay,
   message: "RIVAL SERVE",
   messageSub: "",
@@ -165,6 +167,7 @@ const state = {
   lastHit: "ai",
   pointWinner: null,
   rallyHits: 0,
+  maxRally: 0,
   playerPoints: 0,
   aiPoints: 0,
   playerGames: 0,
@@ -335,6 +338,14 @@ window.addEventListener("keydown", (event) => {
   if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(key)) {
     event.preventDefault();
   }
+  if (state.phase === "matchOver") {
+    if (key === "r") {
+      replayResult();
+    } else if (key === " " || key === "enter" || key === "c") {
+      continueResult();
+    }
+    return;
+  }
   if (key === "a" || key === "arrowleft") input.left = true;
   if (key === "d" || key === "arrowright") input.right = true;
   if (key === "w" || key === "arrowup") input.up = true;
@@ -374,6 +385,7 @@ canvas.addEventListener("pointerdown", (event) => {
   const p = pointerToCanvas(event);
   const controls = controlLayout();
   canvas.setPointerCapture(event.pointerId);
+  if (state.phase === "matchOver") return;
   if (tryHudActionClick(p, controls)) return;
   if (tryThemeClick(p, controls)) return;
   if (distance2(p.x, p.y, controls.stick.x, controls.stick.y) < controls.stick.hot * controls.stick.hot) {
@@ -397,6 +409,10 @@ canvas.addEventListener("pointerdown", (event) => {
 canvas.addEventListener("click", (event) => {
   const p = pointerToCanvas(event);
   const controls = controlLayout();
+  if (state.phase === "matchOver") {
+    tryResultActionClick(p);
+    return;
+  }
   if (tryThemeClick(p, controls)) return;
   if (distance2(p.x, p.y, controls.racket.x, controls.racket.y) < controls.racket.hot * controls.racket.hot) {
     queueHit({ hold: 0, special: false });
@@ -406,6 +422,19 @@ canvas.addEventListener("click", (event) => {
     queueSpecialHit();
   }
 });
+
+function tryResultActionClick(p) {
+  const layout = resultLayout();
+  if (pointInRect(p, layout.replay)) {
+    replayResult();
+    return true;
+  }
+  if (pointInRect(p, layout.continue)) {
+    continueResult();
+    return true;
+  }
+  return false;
+}
 
 function tryHudActionClick(p, controls) {
   if (pointInRect(p, controls.actions.reset)) {
@@ -502,6 +531,8 @@ function resetMatch() {
   state.pausedPhase = null;
   state.pausedMessage = "";
   state.pausedMessageSub = "";
+  state.result = null;
+  state.resultTime = 0;
   state.timer = TUNING.match.serveDelay;
   state.message = "RIVAL SERVE";
   state.messageSub = "";
@@ -509,6 +540,7 @@ function resetMatch() {
   state.lastHit = "ai";
   state.pointWinner = null;
   state.rallyHits = 0;
+  state.maxRally = 0;
   state.playerPoints = 0;
   state.aiPoints = 0;
   state.playerGames = 0;
@@ -524,6 +556,14 @@ function resetMatch() {
   ai.vx = 0;
   ai.vy = 0;
   placeBallForServe();
+}
+
+function replayResult() {
+  resetMatch();
+}
+
+function continueResult() {
+  resetMatch();
 }
 
 function togglePause() {
@@ -562,6 +602,11 @@ function update(dt) {
   if (state.phase === "paused") return;
 
   state.shake = Math.max(0, state.shake - dt * 8);
+  if (state.phase === "matchOver") {
+    state.resultTime += dt;
+    return;
+  }
+
   updateInput(dt);
   updateActorCooldowns(player, dt);
   updateActorCooldowns(ai, dt);
@@ -582,11 +627,6 @@ function update(dt) {
     state.timer -= dt;
     if (state.timer <= 0) {
       startNextPoint();
-    }
-  } else if (state.phase === "matchOver") {
-    state.timer -= dt;
-    if (state.timer <= 0) {
-      resetMatch();
     }
   }
 }
@@ -844,7 +884,7 @@ function playerHit(quality, useSpecial) {
     finalTargetY = miss.y;
   }
   state.lastHit = "player";
-  state.rallyHits += 1;
+  trackRallyHit();
   state.playerShotPressure = missesCourt ? 0 : playerShotPressure(quality, shot, targetX, finalTargetY, hasBounced);
   ball.bounceCount = 0;
   launchBallTo(targetX, finalTargetY, shot, quality === "late" ? 0.92 : 1);
@@ -938,12 +978,17 @@ function aiHit(quality) {
   const targetX = clamp(chooseAiTargetX() + rand(-shot.error, shot.error) * pressureError, -3.95, 3.95);
   const targetY = clamp(chooseAiTargetY(shot) + rand(-shot.error, shot.error) * pressureError, 1.35, 11.45);
   state.lastHit = "ai";
-  state.rallyHits += 1;
+  trackRallyHit();
   state.playerShotPressure = 0;
   ball.bounceCount = 0;
   launchBallTo(targetX, targetY, shot, quality === "late" ? 0.94 : 1);
   ai.swing = 0.18;
   ai.cooldown = TUNING.ai.hitCooldown;
+}
+
+function trackRallyHit() {
+  state.rallyHits += 1;
+  state.maxRally = Math.max(state.maxRally, state.rallyHits);
 }
 
 function chooseAiShot() {
@@ -1030,9 +1075,17 @@ function applyGameScore() {
       state.timer = 1.65;
       if (state.playerGames >= TUNING.match.gamesToWin || state.aiGames >= TUNING.match.gamesToWin) {
         state.phase = "matchOver";
-        state.timer = 3.2;
-        state.message = winner === "player" ? "MATCH WON" : "MATCH LOST";
-        state.messageSub = "NEW MATCH";
+        state.timer = 0;
+        state.resultTime = 0;
+        state.result = {
+          winner,
+          playerGames: state.playerGames,
+          aiGames: state.aiGames,
+          maxRally: state.maxRally,
+          themeIndex: state.themeIndex,
+        };
+        state.message = "";
+        state.messageSub = "";
       }
     }
   }
@@ -1075,8 +1128,12 @@ function render() {
 
   drawNet();
   drawHud();
-  drawControls();
-  drawOverlay();
+  if (state.phase === "matchOver") {
+    drawResultScreen();
+  } else {
+    drawControls();
+    drawOverlay();
+  }
   ctx.restore();
 }
 
@@ -1578,6 +1635,344 @@ function drawThemeButtons(controls) {
   });
 }
 
+function resultLayout() {
+  if (IS_PORTRAIT) {
+    return {
+      stats: { x: 42, y: 612, width: W - 84, height: 150 },
+      replay: { x: 62, y: 792, width: 188, height: 66 },
+      continue: { x: W - 250, y: 792, width: 188, height: 66 },
+    };
+  }
+  return {
+    stats: { x: 280, y: 446, width: 400, height: 124 },
+    replay: { x: 282, y: 600, width: 178, height: 62 },
+    continue: { x: 500, y: 600, width: 178, height: 62 },
+  };
+}
+
+function drawResultScreen() {
+  const result = state.result || {
+    winner: state.playerGames >= state.aiGames ? "player" : "ai",
+    playerGames: state.playerGames,
+    aiGames: state.aiGames,
+    maxRally: state.maxRally,
+  };
+  const won = result.winner === "player";
+  const layout = resultLayout();
+  const t = state.resultTime;
+
+  ctx.save();
+  drawResultBackdrop(won, t);
+  drawResultFrame(won, t);
+  drawResultHeader(won, t);
+  drawResultHero(won, t);
+  drawResultStats(layout.stats, result, won);
+  drawResultButton(layout.replay, "REPLAY", won, false);
+  drawResultButton(layout.continue, "CONTINUE", won, true);
+  ctx.restore();
+}
+
+function drawResultBackdrop(won, t) {
+  ctx.save();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  if (won) {
+    grad.addColorStop(0, "rgba(8, 13, 16, 0.78)");
+    grad.addColorStop(0.42, "rgba(10, 39, 42, 0.82)");
+    grad.addColorStop(1, "rgba(30, 15, 2, 0.94)");
+  } else {
+    grad.addColorStop(0, "rgba(15, 3, 22, 0.86)");
+    grad.addColorStop(0.5, "rgba(31, 5, 24, 0.9)");
+    grad.addColorStop(1, "rgba(3, 5, 17, 0.96)");
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  const cx = W / 2;
+  const cy = won ? 360 : 382;
+  const rayCount = won ? 28 : 18;
+  for (let i = 0; i < rayCount; i += 1) {
+    const a = (i / rayCount) * Math.PI * 2 + t * (won ? 0.22 : -0.12);
+    const spread = won ? 0.035 : 0.02;
+    ctx.fillStyle = won ? "rgba(255, 211, 66, 0.08)" : "rgba(255, 42, 91, 0.07)";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a - spread) * 620, cy + Math.sin(a - spread) * 620);
+    ctx.lineTo(cx + Math.cos(a + spread) * 620, cy + Math.sin(a + spread) * 620);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  drawResultParticles(won, t);
+  if (!won) drawResultCracks(t);
+  drawResultVignette(won);
+  ctx.restore();
+}
+
+function drawResultVignette(won) {
+  const radial = ctx.createRadialGradient(W / 2, H * 0.42, 80, W / 2, H * 0.42, H * 0.64);
+  radial.addColorStop(0, won ? "rgba(255, 214, 58, 0.05)" : "rgba(255, 56, 105, 0.04)");
+  radial.addColorStop(0.58, "rgba(0,0,0,0.08)");
+  radial.addColorStop(1, "rgba(0,0,0,0.58)");
+  ctx.fillStyle = radial;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawResultParticles(won, t) {
+  const colors = won
+    ? ["#ffe65e", "#55f4ff", "#ff7d42", "#fff4bc"]
+    : ["#ff3868", "#8e62ff", "#58c9ff", "#ffd0dd"];
+  for (let i = 0; i < 78; i += 1) {
+    const n1 = pseudoRandom(i * 2 + (won ? 11 : 31));
+    const n2 = pseudoRandom(i * 2 + 1 + (won ? 11 : 31));
+    const drift = (t * (18 + (i % 7) * 3)) % (H + 80);
+    const x = 18 + n1 * (W - 36);
+    const y = ((n2 * H + (won ? drift : -drift)) % (H + 80)) - 40;
+    const size = 2 + (i % 4);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.globalAlpha = won ? 0.72 : 0.55;
+    ctx.fillRect(Math.round(x), Math.round(y), size, size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawResultCracks(t) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 172, 210, 0.56)";
+  ctx.lineWidth = 2;
+  const cracks = [
+    [[34, 86], [94, 132], [122, 206], [178, 258]],
+    [[W - 34, 72], [W - 98, 144], [W - 118, 224], [W - 190, 308]],
+    [[32, H - 102], [96, H - 156], [122, H - 236]],
+    [[W - 42, H - 96], [W - 122, H - 188], [W - 150, H - 292]],
+  ];
+  cracks.forEach((points, index) => {
+    ctx.globalAlpha = 0.48 + Math.sin(t * 5 + index) * 0.12;
+    ctx.beginPath();
+    points.forEach(([x, y], i) => {
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+function drawResultFrame(won, t) {
+  const outer = won ? "#ffd75b" : "#ff3d72";
+  const inner = won ? "rgba(93, 245, 255, 0.72)" : "rgba(141, 99, 255, 0.72)";
+  ctx.save();
+  ctx.strokeStyle = outer;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(9, 9, W - 18, H - 18);
+  ctx.strokeStyle = inner;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(22, 25, W - 44, H - 50);
+  const pulse = 6 + Math.sin(t * 4) * 2;
+  [[34, 38], [W - 58, 38], [34, H - 64], [W - 58, H - 64]].forEach(([x, y]) => {
+    ctx.strokeStyle = outer;
+    ctx.strokeRect(x, y, 24, 24);
+    ctx.fillStyle = inner;
+    ctx.fillRect(x + pulse, y + pulse, 24 - pulse * 2, 24 - pulse * 2);
+  });
+  ctx.restore();
+}
+
+function drawResultHeader(won, t) {
+  const title = won ? "WIN!!" : "DEFEAT";
+  const sub = won ? "MATCH COMPLETE" : "MATCH LOST";
+  const y = IS_PORTRAIT ? 118 : 104;
+  ctx.save();
+  ctx.shadowBlur = won ? 34 : 28;
+  ctx.shadowColor = won ? "#ffd24a" : "#ff3868";
+  drawImpactText(title, W / 2, y, won ? 82 : 70, won ? "#ffe88a" : "#ff5d83", won ? "#632900" : "#250014", won ? 8 : 7);
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = won ? "rgba(4, 43, 40, 0.8)" : "rgba(58, 8, 34, 0.78)";
+  ctx.strokeStyle = won ? "rgba(255, 224, 106, 0.84)" : "rgba(255, 73, 119, 0.84)";
+  ctx.lineWidth = 2;
+  ctx.fillRect(W / 2 - 126, y + 12, 252, 33);
+  ctx.strokeRect(W / 2 - 126, y + 12, 252, 33);
+  drawPixelTextCentered(sub, W / 2, y + 35, 18, won ? "#69f5ff" : "#9fd5ff");
+  ctx.restore();
+}
+
+function drawResultHero(won, t) {
+  const cx = W / 2;
+  const cy = IS_PORTRAIT ? 380 : 326;
+  ctx.save();
+  ctx.translate(cx, cy);
+  const ringPulse = Math.sin(t * 5) * 8;
+  ctx.strokeStyle = won ? "rgba(92, 245, 255, 0.88)" : "rgba(255, 58, 103, 0.72)";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(0, 0, (won ? 128 : 116) + ringPulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = won ? "rgba(255, 217, 71, 0.86)" : "rgba(112, 151, 255, 0.62)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(0, 0, (won ? 94 : 86) - ringPulse * 0.35, 0, Math.PI * 2);
+  ctx.stroke();
+  if (won) {
+    drawPhoenixBurst(t);
+  } else {
+    drawRivalSilhouette(t);
+  }
+  ctx.restore();
+
+  const sprite = actorSprites.player;
+  if (sprite?.complete && sprite.naturalWidth) {
+    const bob = Math.sin(t * 4) * (won ? 8 : 3);
+    drawCenteredImageContain(sprite, cx, cy + 32 + bob, won ? 252 : 222, won ? 300 : 260);
+  } else {
+    drawFallbackResultHero(cx, cy + 68, won);
+  }
+  ctx.fillStyle = won ? "rgba(255, 218, 72, 0.56)" : "rgba(255, 54, 102, 0.54)";
+  ctx.fillRect(cx - 70, cy + 150, 140, 10);
+}
+
+function drawFallbackResultHero(cx, cy, won) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = won ? "#35a88e" : "#26384b";
+  ctx.fillRect(-24, -72, 48, 70);
+  ctx.fillStyle = "#f0b990";
+  ctx.fillRect(-18, -106, 36, 32);
+  ctx.fillStyle = "#7f2e33";
+  ctx.fillRect(-24, -122, 48, 22);
+  ctx.fillStyle = "#e0a02d";
+  ctx.strokeStyle = "#4e1d0a";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.ellipse(42, -72, 18, 26, -0.45, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawPhoenixBurst(t) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(255, 209, 52, 0.72)";
+  ctx.lineWidth = 5;
+  for (let side = -1; side <= 1; side += 2) {
+    ctx.beginPath();
+    ctx.moveTo(0, -24);
+    ctx.bezierCurveTo(side * 58, -92, side * 130, -86 + Math.sin(t * 3) * 8, side * 166, -128);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.bezierCurveTo(side * 70, -40, side * 118, -20, side * 160, -54);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawRivalSilhouette(t) {
+  ctx.save();
+  ctx.globalAlpha = 0.42 + Math.sin(t * 2) * 0.08;
+  ctx.fillStyle = "#07010d";
+  ctx.beginPath();
+  ctx.arc(0, -162, 44, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(-58, -126, 116, 86);
+  ctx.fillStyle = "#9f54ff";
+  ctx.fillRect(-21, -166, 13, 5);
+  ctx.fillRect(9, -166, 13, 5);
+  ctx.restore();
+}
+
+function drawResultStats(box, result, won) {
+  const panel = won ? "rgba(7, 24, 28, 0.88)" : "rgba(12, 10, 24, 0.9)";
+  const hi = won ? "rgba(28, 91, 86, 0.86)" : "rgba(82, 18, 48, 0.86)";
+  const line = won ? "#ffe06a" : "#ff4977";
+  const accent = won ? "#71f8ff" : "#7fc8ff";
+  const score = `${result.playerGames} - ${result.aiGames}`;
+  const maxRally = String(result.maxRally || 0).padStart(2, "0");
+  const rank = resultRank(result);
+
+  ctx.save();
+  ctx.fillStyle = panel;
+  ctx.shadowBlur = won ? 18 : 16;
+  ctx.shadowColor = won ? "rgba(255, 212, 66, 0.7)" : "rgba(255, 50, 102, 0.72)";
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.roundRect(box.x, box.y, box.width, box.height, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = hi;
+  ctx.fillRect(box.x + 12, box.y + 12, box.width - 24, 38);
+  drawPixelTextCentered(won ? "MATCH WIN" : "MATCH LOST", box.x + box.width / 2, box.y + 39, 25, won ? "#ffeaa5" : "#ff9ab0");
+
+  const colW = box.width / 3;
+  drawStatCell(box.x + 24, box.y + 78, colW - 24, "SCORE", score, accent);
+  drawStatCell(box.x + colW + 14, box.y + 78, colW - 24, "MAX RALLY", maxRally, accent);
+  drawStatCell(box.x + colW * 2 + 10, box.y + 78, colW - 26, "RANK", rank, accent);
+  ctx.restore();
+}
+
+function drawStatCell(x, y, width, label, value, accent) {
+  pixelText(label, x, y, 12, accent);
+  ctx.fillStyle = "rgba(255,255,255,0.1)";
+  ctx.fillRect(x, y + 9, width, 2);
+  pixelText(value, x, y + 44, value.length > 3 ? 30 : 36, "#fffdf0");
+}
+
+function drawResultButton(box, label, won, primary) {
+  const fill = primary
+    ? (won ? "rgba(215, 76, 37, 0.92)" : "rgba(38, 94, 166, 0.92)")
+    : (won ? "rgba(20, 126, 116, 0.9)" : "rgba(153, 27, 63, 0.9)");
+  const line = won ? "#ffe779" : "#ff7da0";
+  ctx.save();
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.roundRect(box.x, box.y, box.width, box.height, 10);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.fillRect(box.x + 8, box.y + 8, box.width - 16, 5);
+  drawPixelTextCentered(label, box.x + box.width / 2, box.y + 42, label.length > 7 ? 22 : 24, "#fff8df");
+  ctx.restore();
+}
+
+function resultRank(result) {
+  const won = result.winner === "player";
+  const margin = result.playerGames - result.aiGames;
+  const rally = result.maxRally || 0;
+  if (won && margin >= 2 && rally >= 18) return "SSS";
+  if (won && rally >= 12) return "S";
+  if (won) return "A";
+  if (rally >= 14) return "B";
+  return "C";
+}
+
+function drawImpactText(text, cx, y, size, fill, stroke, strokeWidth) {
+  ctx.save();
+  ctx.font = `900 ${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = strokeWidth;
+  ctx.strokeText(text, cx, y);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, cx, y);
+  ctx.restore();
+}
+
+function drawPixelTextCentered(text, cx, y, size, color) {
+  ctx.save();
+  ctx.font = `${size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+  const width = ctx.measureText(text).width;
+  ctx.restore();
+  pixelText(text, cx - width / 2, y, size, color);
+}
+
+function pseudoRandom(seed) {
+  const x = Math.sin(seed * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
 function drawOverlay() {
   if (!state.message) return;
   if (IS_PORTRAIT) {
@@ -1780,6 +2175,25 @@ function screenToWorld(x, y) {
   return { x: wx, y: wy };
 }
 
+function previewResult(winner = "player") {
+  const playerWon = winner !== "ai";
+  ball.inPlay = false;
+  state.phase = "matchOver";
+  state.resultTime = 0;
+  state.message = "";
+  state.messageSub = "";
+  state.maxRally = Math.max(state.maxRally, playerWon ? 28 : 21);
+  state.playerGames = playerWon ? TUNING.match.gamesToWin : Math.max(0, TUNING.match.gamesToWin - 1);
+  state.aiGames = playerWon ? Math.max(0, TUNING.match.gamesToWin - 1) : TUNING.match.gamesToWin;
+  state.result = {
+    winner: playerWon ? "player" : "ai",
+    playerGames: state.playerGames,
+    aiGames: state.aiGames,
+    maxRally: state.maxRally,
+    themeIndex: state.themeIndex,
+  };
+}
+
 window.PixelTennis = {
   TUNING,
   reset: resetMatch,
@@ -1788,6 +2202,8 @@ window.PixelTennis = {
       phase: state.phase,
       message: state.message,
       rallyHits: state.rallyHits,
+      maxRally: state.maxRally,
+      result: state.result,
       score: {
         playerPoints: state.playerPoints,
         aiPoints: state.aiPoints,
@@ -1801,8 +2217,13 @@ window.PixelTennis = {
       ball: { x: ball.x, y: ball.y, z: ball.z, inPlay: ball.inPlay },
     };
   },
+  previewResult,
 };
 
 noiseTiles = createNoiseTiles();
 placeBallForServe();
+const previewWinner = new URLSearchParams(window.location.search).get("previewResult");
+if (previewWinner === "player" || previewWinner === "ai") {
+  previewResult(previewWinner);
+}
 requestAnimationFrame(gameLoop);
