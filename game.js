@@ -155,6 +155,9 @@ const CHARACTER_SKINS = {
 
 const state = {
   phase: "serveWait",
+  pausedPhase: null,
+  pausedMessage: "",
+  pausedMessageSub: "",
   timer: TUNING.match.serveDelay,
   message: "RIVAL SERVE",
   messageSub: "",
@@ -299,6 +302,10 @@ function controlLayout() {
       special: { x: W - 172, y: H - 112, radius: 44, hot: 60 },
       racket: { x: W - 82, y: H - 116, radius: 64, hot: 88 },
       energy: { x: W - 38, y: H - 292, width: 24, height: 202 },
+      actions: {
+        reset: { x: W - 128, y: 144, width: 42, height: 42 },
+        pause: { x: W - 74, y: 144, width: 42, height: 42 },
+      },
       themes: [
         { x: 34, y: 146, size: 34 },
         { x: 76, y: 146, size: 34 },
@@ -311,6 +318,10 @@ function controlLayout() {
     special: { x: 694, y: 628, radius: 50, hot: 66 },
     racket: { x: 808, y: 608, radius: 74, hot: 96 },
     energy: { x: 902, y: 498, width: 28, height: 168 },
+    actions: {
+      reset: { x: 716, y: 116, width: 48, height: 48 },
+      pause: { x: 782, y: 116, width: 48, height: 48 },
+    },
     themes: [
       { x: 54, y: 126, size: 36 },
       { x: 98, y: 126, size: 36 },
@@ -363,6 +374,7 @@ canvas.addEventListener("pointerdown", (event) => {
   const p = pointerToCanvas(event);
   const controls = controlLayout();
   canvas.setPointerCapture(event.pointerId);
+  if (tryHudActionClick(p, controls)) return;
   if (tryThemeClick(p, controls)) return;
   if (distance2(p.x, p.y, controls.stick.x, controls.stick.y) < controls.stick.hot * controls.stick.hot) {
     input.stickPointerId = event.pointerId;
@@ -395,6 +407,18 @@ canvas.addEventListener("click", (event) => {
   }
 });
 
+function tryHudActionClick(p, controls) {
+  if (pointInRect(p, controls.actions.reset)) {
+    resetMatch();
+    return true;
+  }
+  if (pointInRect(p, controls.actions.pause)) {
+    togglePause();
+    return true;
+  }
+  return false;
+}
+
 function tryThemeClick(p, controls) {
   for (let i = 0; i < controls.themes.length; i += 1) {
     const button = controls.themes[i];
@@ -406,6 +430,10 @@ function tryThemeClick(p, controls) {
     }
   }
   return false;
+}
+
+function pointInRect(p, rect) {
+  return p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height;
 }
 
 canvas.addEventListener("pointermove", (event) => {
@@ -471,6 +499,9 @@ function setStickFromPointer(p) {
 
 function resetMatch() {
   state.phase = "serveWait";
+  state.pausedPhase = null;
+  state.pausedMessage = "";
+  state.pausedMessageSub = "";
   state.timer = TUNING.match.serveDelay;
   state.message = "RIVAL SERVE";
   state.messageSub = "";
@@ -497,11 +528,19 @@ function resetMatch() {
 
 function togglePause() {
   if (state.phase === "paused") {
-    state.phase = ball.inPlay ? "rally" : "serveWait";
-    state.message = ball.inPlay ? "" : `${state.server === "player" ? "PLAYER" : "RIVAL"} SERVE`;
+    state.phase = state.pausedPhase || (ball.inPlay ? "rally" : "serveWait");
+    state.message = state.pausedMessage;
+    state.messageSub = state.pausedMessageSub;
+    state.pausedPhase = null;
+    state.pausedMessage = "";
+    state.pausedMessageSub = "";
   } else {
+    state.pausedPhase = state.phase;
+    state.pausedMessage = state.message;
+    state.pausedMessageSub = state.messageSub;
     state.phase = "paused";
     state.message = "PAUSED";
+    state.messageSub = "";
   }
 }
 
@@ -1326,6 +1365,7 @@ function drawHeldRacket(actor, dir) {
 }
 
 function drawHud() {
+  const controls = controlLayout();
   if (IS_PORTRAIT) {
     const x = 18;
     const y = 18;
@@ -1352,11 +1392,7 @@ function drawHud() {
 
     pixelText("RALLY", W / 2 - 24, y + 38, 11, "#bcd0d5");
     pixelText(String(state.rallyHits).padStart(2, "0"), W / 2 - 17, y + 66, 22, "#e7f7ff");
-    ctx.fillStyle = "rgba(12,19,24,0.54)";
-    ctx.fillRect(W - 128, 144, 42, 42);
-    ctx.fillRect(W - 74, 144, 42, 42);
-    pixelText("R", W - 113, 172, 19, "#f1f4ff");
-    pixelText("II", W - 62, 172, 17, "#f1f4ff");
+    drawHudActionButtons(controls);
 
     drawEnergyBar();
     return;
@@ -1384,13 +1420,23 @@ function drawHud() {
   pixelText("RALLY", 446, 46, 12, "#bcd0d5");
   pixelText(String(state.rallyHits).padStart(2, "0"), 462, 68, 22, "#e7f7ff");
 
-  ctx.fillStyle = "rgba(12,19,24,0.72)";
-  ctx.fillRect(716, 116, 48, 48);
-  ctx.fillRect(782, 116, 48, 48);
-  pixelText("R", 733, 148, 22, "#f1f4ff");
-  pixelText("II", 796, 148, 20, "#f1f4ff");
+  drawHudActionButtons(controls);
 
   drawEnergyBar();
+}
+
+function drawHudActionButtons(controls) {
+  const reset = controls.actions.reset;
+  const pause = controls.actions.pause;
+  ctx.fillStyle = IS_PORTRAIT ? "rgba(12,19,24,0.54)" : "rgba(12,19,24,0.72)";
+  ctx.fillRect(reset.x, reset.y, reset.width, reset.height);
+  ctx.fillRect(pause.x, pause.y, pause.width, pause.height);
+  ctx.strokeStyle = "rgba(207, 239, 230, 0.22)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(reset.x, reset.y, reset.width, reset.height);
+  ctx.strokeRect(pause.x, pause.y, pause.width, pause.height);
+  pixelText("R", reset.x + (IS_PORTRAIT ? 15 : 17), reset.y + (IS_PORTRAIT ? 28 : 32), IS_PORTRAIT ? 19 : 22, "#f1f4ff");
+  pixelText("II", pause.x + (IS_PORTRAIT ? 12 : 14), pause.y + (IS_PORTRAIT ? 28 : 32), IS_PORTRAIT ? 17 : 20, "#f1f4ff");
 }
 
 function drawEnergyBar() {
