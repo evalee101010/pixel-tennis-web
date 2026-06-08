@@ -12,6 +12,22 @@ python3 -m http.server 4173
 
 Open `http://localhost:4173/`.
 
+## Online Multiplayer Prototype
+
+Single-player stays as the default static page. To try the online room prototype locally, run the WebSocket room server:
+
+```sh
+node server/multiplayer-server.js
+```
+
+Open `http://localhost:8787/?mode=online` to create a room, then share the room code or URL with a second browser/tab:
+
+```text
+http://localhost:8787/?mode=online&room=ABCD
+```
+
+The room server owns movement, ball physics, scoring, match result, replay, and theme sync. P1 controls the bottom player, and P2 controls the top player.
+
 ## Deploy
 
 See `DEPLOY.md`. The project is static and can be published from the repository root with no build command.

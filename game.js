@@ -68,6 +68,8 @@ ctx.imageSmoothingEnabled = false;
 const W = canvas.width;
 const H = canvas.height;
 const IS_PORTRAIT = H > W;
+const URL_PARAMS = new URLSearchParams(window.location.search);
+const ONLINE_MODE = URL_PARAMS.get("mode") === "online";
 const COURT = {
   cx: W / 2,
   top: IS_PORTRAIT ? 168 : 78,
@@ -76,6 +78,20 @@ const COURT = {
 };
 
 const scoreLabels = ["0", "15", "30", "40"];
+
+const ONLINE = {
+  enabled: ONLINE_MODE,
+  status: ONLINE_MODE ? "connecting" : "off",
+  socket: null,
+  serverUrl: "",
+  room: URL_PARAMS.get("room") || "",
+  playerId: null,
+  role: null,
+  lastInputSent: 0,
+  reconnectAt: 0,
+  snapshotAt: 0,
+  message: "",
+};
 
 const THEMES = [
   {
@@ -296,6 +312,215 @@ function currentTheme() {
 
 function setTheme(index) {
   state.themeIndex = clamp(index, 0, THEMES.length - 1);
+  if (ONLINE.enabled) {
+    sendOnline({ type: "theme", index: state.themeIndex });
+  }
+}
+
+function onlineServerUrl() {
+  const explicit = URL_PARAMS.get("server");
+  if (explicit) return explicit;
+  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+    return "ws://localhost:8787/ws";
+  }
+  if (location.protocol === "http:" && location.host) {
+    return `ws://${location.host}/ws`;
+  }
+  return "";
+}
+
+function initOnlineMode() {
+  if (!ONLINE.enabled) return;
+  ONLINE.serverUrl = onlineServerUrl();
+  ball.inPlay = false;
+  state.phase = "waiting";
+  state.message = ONLINE.serverUrl ? "CONNECTING" : "ONLINE SERVER REQUIRED";
+  state.messageSub = ONLINE.serverUrl ? "ONLINE ROOM" : "ADD ?server=wss://.../ws";
+  if (ONLINE.serverUrl) connectOnline();
+}
+
+function connectOnline() {
+  if (!ONLINE.enabled || !ONLINE.serverUrl) return;
+  if (ONLINE.socket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(ONLINE.socket.readyState)) return;
+  ONLINE.status = "connecting";
+  ONLINE.message = "CONNECTING";
+  try {
+    const socket = new WebSocket(ONLINE.serverUrl);
+    ONLINE.socket = socket;
+    socket.addEventListener("open", () => {
+      ONLINE.status = "connected";
+      ONLINE.message = "";
+      sendOnline({ type: "join", room: ONLINE.room });
+    });
+    socket.addEventListener("message", (event) => {
+      handleOnlineMessage(event.data);
+    });
+    socket.addEventListener("close", () => {
+      ONLINE.status = "disconnected";
+      ONLINE.message = "DISCONNECTED";
+      ONLINE.reconnectAt = performance.now() + 1800;
+    });
+    socket.addEventListener("error", () => {
+      ONLINE.status = "error";
+      ONLINE.message = "CONNECTION ERROR";
+    });
+  } catch (error) {
+    ONLINE.status = "error";
+    ONLINE.message = "CONNECTION ERROR";
+    ONLINE.reconnectAt = performance.now() + 2200;
+  }
+}
+
+function handleOnlineMessage(raw) {
+  let packet;
+  try {
+    packet = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (packet.type === "welcome") {
+    ONLINE.room = packet.room;
+    ONLINE.playerId = packet.playerId;
+    ONLINE.role = packet.role;
+    ONLINE.status = "connected";
+    syncOnlineUrl();
+    return;
+  }
+  if (packet.type === "state") {
+    applyOnlineState(packet);
+  } else if (packet.type === "error") {
+    ONLINE.message = packet.message || "ONLINE ERROR";
+  }
+}
+
+function syncOnlineUrl() {
+  if (!ONLINE.room) return;
+  const params = new URLSearchParams(window.location.search);
+  params.set("mode", "online");
+  params.set("room", ONLINE.room);
+  if (URL_PARAMS.get("server")) params.set("server", URL_PARAMS.get("server"));
+  const next = `${location.pathname}?${params.toString()}`;
+  history.replaceState(null, "", next);
+}
+
+function sendOnline(payload) {
+  if (!ONLINE.enabled || !ONLINE.socket || ONLINE.socket.readyState !== WebSocket.OPEN) return false;
+  ONLINE.socket.send(JSON.stringify(payload));
+  return true;
+}
+
+function onlineInputPayload() {
+  const stickLeft = input.stick.x < -0.25;
+  const stickRight = input.stick.x > 0.25;
+  const stickUp = input.stick.y < -0.25;
+  const stickDown = input.stick.y > 0.25;
+  return {
+    left: input.left || stickLeft,
+    right: input.right || stickRight,
+    up: input.up || stickUp,
+    down: input.down || stickDown,
+    hit: input.hit || input.hitQueued,
+    special: input.queuedSpecial,
+    aim: clamp(input.aim, -1, 1),
+  };
+}
+
+function sendOnlineInput() {
+  const now = performance.now();
+  if (now - ONLINE.lastInputSent < 38) return;
+  ONLINE.lastInputSent = now;
+  sendOnline({ type: "input", input: onlineInputPayload() });
+}
+
+function updateOnline(dt) {
+  state.shake = Math.max(0, state.shake - dt * 8);
+  if (state.phase === "matchOver") {
+    state.resultTime += dt;
+  }
+  updateInput(dt);
+  sendOnlineInput();
+  updateActorCooldowns(player, dt);
+  updateActorCooldowns(ai, dt);
+  const now = performance.now();
+  if ((ONLINE.status === "disconnected" || ONLINE.status === "error") && now > ONLINE.reconnectAt) {
+    connectOnline();
+  }
+}
+
+function applyOnlineState(packet) {
+  ONLINE.snapshotAt = performance.now();
+  ONLINE.room = packet.room || ONLINE.room;
+  state.phase = packet.phase || "waiting";
+  state.timer = packet.timer ?? 0;
+  state.message = packet.message || "";
+  state.messageSub = packet.messageSub || (ONLINE.room ? `ROOM ${ONLINE.room}` : "");
+  state.server = packet.server === "p1" ? "player" : "ai";
+  state.lastHit = packet.lastHit === "p1" ? "player" : "ai";
+  state.rallyHits = packet.rallyHits ?? 0;
+  state.maxRally = packet.maxRally ?? 0;
+  state.themeIndex = clamp(packet.themeIndex ?? 0, 0, THEMES.length - 1);
+
+  const score = packet.score || {};
+  state.playerPoints = score.playerPoints ?? 0;
+  state.aiPoints = score.aiPoints ?? 0;
+  state.playerGames = score.playerGames ?? 0;
+  state.aiGames = score.aiGames ?? 0;
+
+  const players = packet.players || {};
+  applyOnlineActor(player, players.p1, 9.9);
+  applyOnlineActor(ai, players.p2, -9.9);
+  const local = players[ONLINE.playerId] || players.p1;
+  state.energy = local?.energy ?? 0;
+
+  if (packet.ball) {
+    ball.x = packet.ball.x ?? 0;
+    ball.y = packet.ball.y ?? 0;
+    ball.z = packet.ball.z ?? 0;
+    ball.vx = packet.ball.vx ?? 0;
+    ball.vy = packet.ball.vy ?? 0;
+    ball.vz = packet.ball.vz ?? 0;
+    ball.bounceCount = packet.ball.bounceCount ?? 0;
+    ball.inPlay = !!packet.ball.inPlay;
+    ball.lastY = packet.ball.lastY ?? ball.y;
+    if (ball.inPlay) {
+      ball.trail.unshift({ x: ball.x, y: ball.y, z: ball.z });
+      if (ball.trail.length > 9) ball.trail.pop();
+    } else {
+      ball.trail.length = 0;
+    }
+  }
+
+  if (packet.result) {
+    const localIsP2 = ONLINE.playerId === "p2";
+    const localGames = localIsP2 ? packet.result.aiGames : packet.result.playerGames;
+    const otherGames = localIsP2 ? packet.result.playerGames : packet.result.aiGames;
+    state.result = {
+      winner: packet.result.winner === ONLINE.playerId ? "player" : "ai",
+      playerGames: localGames,
+      aiGames: otherGames,
+      maxRally: packet.result.maxRally,
+      themeIndex: state.themeIndex,
+    };
+    if (state.phase === "matchOver" && !state.resultTime) state.resultTime = 0.001;
+  } else {
+    state.result = null;
+    state.resultTime = 0;
+  }
+}
+
+function applyOnlineActor(actor, data, fallbackY) {
+  if (!data) {
+    actor.x = 0;
+    actor.y = fallbackY;
+    actor.vx = 0;
+    actor.vy = 0;
+    return;
+  }
+  actor.x = Number(data.x) || 0;
+  actor.y = Number(data.y) || fallbackY;
+  actor.vx = Number(data.vx) || 0;
+  actor.vy = Number(data.vy) || 0;
+  actor.cooldown = Number(data.cooldown) || 0;
 }
 
 function controlLayout() {
@@ -527,6 +752,10 @@ function setStickFromPointer(p) {
 }
 
 function resetMatch() {
+  if (ONLINE.enabled) {
+    sendOnline({ type: "action", action: "replay" });
+    return;
+  }
   state.phase = "serveWait";
   state.pausedPhase = null;
   state.pausedMessage = "";
@@ -559,10 +788,18 @@ function resetMatch() {
 }
 
 function replayResult() {
+  if (ONLINE.enabled) {
+    sendOnline({ type: "action", action: "replay" });
+    return;
+  }
   resetMatch();
 }
 
 function continueResult() {
+  if (ONLINE.enabled) {
+    sendOnline({ type: "action", action: "continue" });
+    return;
+  }
   resetMatch();
 }
 
@@ -599,6 +836,10 @@ function gameLoop(now) {
 }
 
 function update(dt) {
+  if (ONLINE.enabled) {
+    updateOnline(dt);
+    return;
+  }
   if (state.phase === "paused") return;
 
   state.shake = Math.max(0, state.shake - dt * 8);
@@ -1133,6 +1374,7 @@ function render() {
   } else {
     drawControls();
     drawOverlay();
+    if (ONLINE.enabled) drawOnlineStatus();
   }
   ctx.restore();
 }
@@ -1389,6 +1631,29 @@ function drawActor(actor) {
     drawHeldRacket(actor, dir);
   }
   ctx.restore();
+  if (ONLINE.enabled) drawOnlineActorTag(actor, x, y);
+}
+
+function drawOnlineActorTag(actor, x, y) {
+  const isLocal = (ONLINE.playerId === "p1" && actor.side === "player") || (ONLINE.playerId === "p2" && actor.side === "ai");
+  const label = isLocal ? "YOU" : actor.side === "player" ? "P1" : "P2";
+  const color = isLocal ? "#fff27a" : "rgba(226,246,255,0.82)";
+  const width = isLocal ? 42 : 30;
+  ctx.save();
+  ctx.fillStyle = isLocal ? "rgba(35, 24, 0, 0.74)" : "rgba(7, 12, 18, 0.54)";
+  ctx.strokeStyle = isLocal ? "rgba(255, 225, 92, 0.88)" : "rgba(200, 236, 246, 0.32)";
+  ctx.lineWidth = 2;
+  ctx.fillRect(x - width / 2, y - 112, width, 22);
+  ctx.strokeRect(x - width / 2, y - 112, width, 22);
+  drawPixelTextCentered(label, x, y - 96, 13, color);
+  if (isLocal) {
+    ctx.strokeStyle = "rgba(255, 225, 92, 0.78)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(x, y + 26, 34, 12, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawActorFallback(isPlayer) {
@@ -1423,6 +1688,8 @@ function drawHeldRacket(actor, dir) {
 
 function drawHud() {
   const controls = controlLayout();
+  const leftLabel = ONLINE.enabled ? "P1" : "PLAYER";
+  const rightLabel = ONLINE.enabled ? "P2" : "RIVAL";
   if (IS_PORTRAIT) {
     const x = 18;
     const y = 18;
@@ -1438,8 +1705,8 @@ function drawHud() {
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
 
-    pixelText("PLAYER", x + 24, y + 30, 16, "#b9efff");
-    pixelText("RIVAL", x + w - 82, y + 30, 16, "#ffc4d5");
+    pixelText(leftLabel, x + 24, y + 30, 16, "#b9efff");
+    pixelText(rightLabel, x + w - (ONLINE.enabled ? 48 : 82), y + 30, 16, "#ffc4d5");
     pixelText(pointText(state.playerPoints, state.aiPoints), x + 28, y + 76, 34, "#ffffff");
     pixelText(String(state.playerGames), x + 156, y + 76, 34, "#ffffff");
     pixelText(pointText(state.aiPoints, state.playerPoints), x + w - 178, y + 76, 34, "#ffffff");
@@ -1464,8 +1731,8 @@ function drawHud() {
   ctx.lineWidth = 2;
   ctx.strokeRect(44, 18, 868, 90);
 
-  pixelText("PLAYER", 84, 44, 18, "#b9efff");
-  pixelText("RIVAL", 802, 44, 18, "#ffc4d5");
+  pixelText(leftLabel, 84, 44, 18, "#b9efff");
+  pixelText(rightLabel, ONLINE.enabled ? 840 : 802, 44, 18, "#ffc4d5");
   pixelText(pointText(state.playerPoints, state.aiPoints), 102, 78, 40, "#ffffff");
   pixelText(String(state.playerGames), 312, 78, 40, "#ffffff");
   pixelText(pointText(state.aiPoints, state.playerPoints), 610, 78, 40, "#ffffff");
@@ -2008,6 +2275,77 @@ function drawOverlay() {
   }
 }
 
+function drawOnlineStatus() {
+  if (!ONLINE.enabled) return;
+  const stale = ONLINE.snapshotAt > 0 && performance.now() - ONLINE.snapshotAt > 2200;
+  const needsPanel = state.phase === "waiting" || ONLINE.status !== "connected" || stale || !ONLINE.playerId;
+  if (needsPanel) {
+    drawOnlineRoomPanel(stale);
+  } else {
+    drawOnlineBadge();
+  }
+}
+
+function drawOnlineRoomPanel(stale) {
+  const box = IS_PORTRAIT
+    ? { x: 42, y: 286, width: W - 84, height: 168 }
+    : { x: 284, y: 252, width: 392, height: 146 };
+  const title = ONLINE.room ? `ROOM ${ONLINE.room}` : "ONLINE ROOM";
+  const status = onlineStatusText(stale);
+  const role = onlineRoleText();
+  ctx.save();
+  ctx.fillStyle = "rgba(5, 10, 15, 0.82)";
+  ctx.strokeStyle = "rgba(255, 219, 94, 0.82)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = "rgba(40, 75, 82, 0.48)";
+  ctx.fillRect(box.x + 10, box.y + 10, box.width - 20, 42);
+  drawPixelTextCentered(title, box.x + box.width / 2, box.y + 40, 24, "#fff3a8");
+  drawPixelTextCentered(status, box.x + box.width / 2, box.y + 82, 18, "#e8fbff");
+  drawPixelTextCentered(role, box.x + box.width / 2, box.y + 112, 15, "#9feaff");
+  if (ONLINE.room) {
+    drawPixelTextCentered("SHARE ROOM CODE WITH FRIEND", box.x + box.width / 2, box.y + 140, 13, "#ffdc72");
+  } else if (!ONLINE.serverUrl) {
+    drawPixelTextCentered("ADD SERVER PARAM TO URL", box.x + box.width / 2, box.y + 140, 13, "#ffdc72");
+  }
+  ctx.restore();
+}
+
+function drawOnlineBadge() {
+  const label = `${String(ONLINE.playerId || "P?").toUpperCase()} ONLINE`;
+  const x = IS_PORTRAIT ? W - 146 : W - 176;
+  const y = IS_PORTRAIT ? 18 : 22;
+  const width = IS_PORTRAIT ? 128 : 150;
+  ctx.save();
+  ctx.fillStyle = "rgba(4, 14, 18, 0.64)";
+  ctx.strokeStyle = "rgba(91, 240, 255, 0.54)";
+  ctx.lineWidth = 2;
+  ctx.fillRect(x, y, width, 30);
+  ctx.strokeRect(x, y, width, 30);
+  pixelText(label, x + 12, y + 21, 13, "#baf7ff");
+  ctx.restore();
+}
+
+function onlineStatusText(stale) {
+  if (!ONLINE.serverUrl) return "SERVER URL REQUIRED";
+  if (stale) return "SYNCING...";
+  if (ONLINE.status === "connected") {
+    return state.phase === "waiting" ? state.message || "WAITING" : "CONNECTED";
+  }
+  if (ONLINE.status === "connecting") return "CONNECTING...";
+  if (ONLINE.status === "disconnected") return "RECONNECTING...";
+  if (ONLINE.status === "error") return "CONNECTION ERROR";
+  return ONLINE.message || "ONLINE";
+}
+
+function onlineRoleText() {
+  if (ONLINE.role === "spectator") return "SPECTATOR";
+  if (ONLINE.playerId === "p1") return "YOU CONTROL P1 BOTTOM";
+  if (ONLINE.playerId === "p2") return "YOU CONTROL P2 TOP";
+  return "JOINING ROOM";
+}
+
 function drawRacketIcon(x, y, scale) {
   ctx.save();
   ctx.translate(x, y);
@@ -2215,6 +2553,16 @@ window.PixelTennis = {
       player: { x: player.x, y: player.y },
       ai: { x: ai.x, y: ai.y },
       ball: { x: ball.x, y: ball.y, z: ball.z, inPlay: ball.inPlay },
+      online: ONLINE.enabled
+        ? {
+            status: ONLINE.status,
+            room: ONLINE.room,
+            playerId: ONLINE.playerId,
+            role: ONLINE.role,
+            serverUrl: ONLINE.serverUrl,
+            snapshotAgeMs: ONLINE.snapshotAt ? Math.round(performance.now() - ONLINE.snapshotAt) : null,
+          }
+        : null,
     };
   },
   previewResult,
@@ -2222,8 +2570,9 @@ window.PixelTennis = {
 
 noiseTiles = createNoiseTiles();
 placeBallForServe();
-const previewWinner = new URLSearchParams(window.location.search).get("previewResult");
-if (previewWinner === "player" || previewWinner === "ai") {
+initOnlineMode();
+const previewWinner = URL_PARAMS.get("previewResult");
+if (!ONLINE.enabled && (previewWinner === "player" || previewWinner === "ai")) {
   previewResult(previewWinner);
 }
 requestAnimationFrame(gameLoop);
