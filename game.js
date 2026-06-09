@@ -310,6 +310,63 @@ function currentTheme() {
   return THEMES[state.themeIndex] || THEMES[0];
 }
 
+function isMirroredView() {
+  return ONLINE.enabled && ONLINE.playerId === "p2";
+}
+
+function worldToViewPoint(x, y) {
+  return isMirroredView() ? { x: -x, y: -y } : { x, y };
+}
+
+function viewToWorldPoint(x, y) {
+  return isMirroredView() ? { x: -x, y: -y } : { x, y };
+}
+
+function viewDepthY(y) {
+  return isMirroredView() ? -y : y;
+}
+
+function scoreView() {
+  if (!ONLINE.enabled) {
+    return {
+      leftLabel: "PLAYER",
+      rightLabel: "RIVAL",
+      leftPoints: state.playerPoints,
+      rightPoints: state.aiPoints,
+      leftGames: state.playerGames,
+      rightGames: state.aiGames,
+    };
+  }
+  if (ONLINE.playerId === "p2") {
+    return {
+      leftLabel: "YOU",
+      rightLabel: "OPP",
+      leftPoints: state.aiPoints,
+      rightPoints: state.playerPoints,
+      leftGames: state.aiGames,
+      rightGames: state.playerGames,
+    };
+  }
+  if (ONLINE.playerId === "p1") {
+    return {
+      leftLabel: "YOU",
+      rightLabel: "OPP",
+      leftPoints: state.playerPoints,
+      rightPoints: state.aiPoints,
+      leftGames: state.playerGames,
+      rightGames: state.aiGames,
+    };
+  }
+  return {
+    leftLabel: "P1",
+    rightLabel: "P2",
+    leftPoints: state.playerPoints,
+    rightPoints: state.aiPoints,
+    leftGames: state.playerGames,
+    rightGames: state.aiGames,
+  };
+}
+
 function setTheme(index) {
   state.themeIndex = clamp(index, 0, THEMES.length - 1);
   if (ONLINE.enabled) {
@@ -410,18 +467,25 @@ function sendOnline(payload) {
 }
 
 function onlineInputPayload() {
-  const stickLeft = input.stick.x < -0.25;
-  const stickRight = input.stick.x > 0.25;
-  const stickUp = input.stick.y < -0.25;
-  const stickDown = input.stick.y > 0.25;
-  return {
-    left: input.left || stickLeft,
-    right: input.right || stickRight,
-    up: input.up || stickUp,
-    down: input.down || stickDown,
+  const local = {
+    left: input.left || input.stick.x < -0.25,
+    right: input.right || input.stick.x > 0.25,
+    up: input.up || input.stick.y < -0.25,
+    down: input.down || input.stick.y > 0.25,
     hit: input.hit || input.hitQueued,
     special: input.queuedSpecial,
     aim: clamp(input.aim, -1, 1),
+    shotUp: input.up || input.stick.y < -0.25,
+    shotDown: input.down || input.stick.y > 0.25,
+  };
+  if (!isMirroredView()) return local;
+  return {
+    ...local,
+    left: local.right,
+    right: local.left,
+    up: local.down,
+    down: local.up,
+    aim: -local.aim,
   };
 }
 
@@ -1361,9 +1425,9 @@ function render() {
   drawBallTrail();
 
   const drawables = [
-    { y: player.y, draw: () => drawActor(player) },
-    { y: ai.y, draw: () => drawActor(ai) },
-    { y: ball.y + ball.z * 0.12, draw: drawBall },
+    { y: viewDepthY(player.y), draw: () => drawActor(player) },
+    { y: viewDepthY(ai.y), draw: () => drawActor(ai) },
+    { y: viewDepthY(ball.y) + ball.z * 0.12, draw: drawBall },
   ].sort((a, b) => a.y - b.y);
   drawables.forEach((item) => item.draw());
 
@@ -1382,7 +1446,7 @@ function render() {
 function drawBackground() {
   const image = themeImages[state.themeIndex];
   if (image && image.complete && image.naturalWidth) {
-    drawCoverImage(image, 0, 0, W, H);
+    drawCoverImageForView(image, 0, 0, W, H);
   } else {
     ctx.fillStyle = "#23351f";
     ctx.fillRect(0, 0, W, H);
@@ -1615,7 +1679,7 @@ function drawActor(actor) {
   const x = Math.round(p.x);
   const y = Math.round(p.y);
   const isPlayer = actor.side === "player";
-  const dir = isPlayer ? -1 : 1;
+  const dir = viewDepthY(actor.y) > 0 ? -1 : 1;
   const bob = Math.sin(actor.pose * 9) * (Math.hypot(actor.vx, actor.vy) > 0.5 ? 2 : 0);
   const sprite = actor.side === "player" ? actorSprites.player : actorSprites.ai;
 
@@ -1688,8 +1752,7 @@ function drawHeldRacket(actor, dir) {
 
 function drawHud() {
   const controls = controlLayout();
-  const leftLabel = ONLINE.enabled ? "P1" : "PLAYER";
-  const rightLabel = ONLINE.enabled ? "P2" : "RIVAL";
+  const score = scoreView();
   if (IS_PORTRAIT) {
     const x = 18;
     const y = 18;
@@ -1705,14 +1768,14 @@ function drawHud() {
     ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
 
-    pixelText(leftLabel, x + 24, y + 30, 16, "#b9efff");
-    pixelText(rightLabel, x + w - (ONLINE.enabled ? 48 : 82), y + 30, 16, "#ffc4d5");
-    pixelText(pointText(state.playerPoints, state.aiPoints), x + 28, y + 76, 34, "#ffffff");
-    pixelText(String(state.playerGames), x + 156, y + 76, 34, "#ffffff");
-    pixelText(pointText(state.aiPoints, state.playerPoints), x + w - 178, y + 76, 34, "#ffffff");
-    pixelText(String(state.aiGames), x + w - 48, y + 76, 34, "#ffffff");
-    drawTinyBar(x + 88, y + 78, 56, 8, state.playerPoints / 4, "#fff25e");
-    drawTinyBar(x + w - 160, y + 78, 72, 8, state.aiPoints / 4, "#fff25e");
+    pixelText(score.leftLabel, x + 24, y + 30, 16, "#b9efff");
+    pixelText(score.rightLabel, x + w - (score.rightLabel.length > 3 ? 64 : 48), y + 30, 16, "#ffc4d5");
+    pixelText(pointText(score.leftPoints, score.rightPoints), x + 28, y + 76, 34, "#ffffff");
+    pixelText(String(score.leftGames), x + 156, y + 76, 34, "#ffffff");
+    pixelText(pointText(score.rightPoints, score.leftPoints), x + w - 178, y + 76, 34, "#ffffff");
+    pixelText(String(score.rightGames), x + w - 48, y + 76, 34, "#ffffff");
+    drawTinyBar(x + 88, y + 78, 56, 8, score.leftPoints / 4, "#fff25e");
+    drawTinyBar(x + w - 160, y + 78, 72, 8, score.rightPoints / 4, "#fff25e");
 
     pixelText("RALLY", W / 2 - 24, y + 38, 11, "#bcd0d5");
     pixelText(String(state.rallyHits).padStart(2, "0"), W / 2 - 17, y + 66, 22, "#e7f7ff");
@@ -1731,15 +1794,15 @@ function drawHud() {
   ctx.lineWidth = 2;
   ctx.strokeRect(44, 18, 868, 90);
 
-  pixelText(leftLabel, 84, 44, 18, "#b9efff");
-  pixelText(rightLabel, ONLINE.enabled ? 840 : 802, 44, 18, "#ffc4d5");
-  pixelText(pointText(state.playerPoints, state.aiPoints), 102, 78, 40, "#ffffff");
-  pixelText(String(state.playerGames), 312, 78, 40, "#ffffff");
-  pixelText(pointText(state.aiPoints, state.playerPoints), 610, 78, 40, "#ffffff");
-  pixelText(String(state.aiGames), 836, 78, 40, "#ffffff");
+  pixelText(score.leftLabel, 84, 44, 18, "#b9efff");
+  pixelText(score.rightLabel, score.rightLabel.length > 3 ? 812 : 840, 44, 18, "#ffc4d5");
+  pixelText(pointText(score.leftPoints, score.rightPoints), 102, 78, 40, "#ffffff");
+  pixelText(String(score.leftGames), 312, 78, 40, "#ffffff");
+  pixelText(pointText(score.rightPoints, score.leftPoints), 610, 78, 40, "#ffffff");
+  pixelText(String(score.rightGames), 836, 78, 40, "#ffffff");
 
-  drawTinyBar(181, 83, 70, 10, state.playerPoints / 4, "#fff25e");
-  drawTinyBar(570, 83, 112, 10, state.aiPoints / 4, "#fff25e");
+  drawTinyBar(181, 83, 70, 10, score.leftPoints / 4, "#fff25e");
+  drawTinyBar(570, 83, 112, 10, score.rightPoints / 4, "#fff25e");
 
   pixelText("RALLY", 446, 46, 12, "#bcd0d5");
   pixelText(String(state.rallyHits).padStart(2, "0"), 462, 68, 22, "#e7f7ff");
@@ -1918,10 +1981,11 @@ function resultLayout() {
 }
 
 function drawResultScreen() {
+  const score = scoreView();
   const result = state.result || {
-    winner: state.playerGames >= state.aiGames ? "player" : "ai",
-    playerGames: state.playerGames,
-    aiGames: state.aiGames,
+    winner: score.leftGames >= score.rightGames ? "player" : "ai",
+    playerGames: score.leftGames,
+    aiGames: score.rightGames,
     maxRally: state.maxRally,
   };
   const won = result.winner === "player";
@@ -2085,7 +2149,7 @@ function drawResultHero(won, t) {
   }
   ctx.restore();
 
-  const sprite = actorSprites.player;
+  const sprite = resultHeroSprite();
   if (sprite?.complete && sprite.naturalWidth) {
     const bob = Math.sin(t * 4) * (won ? 8 : 3);
     drawCenteredImageContain(sprite, cx, cy + 32 + bob, won ? 252 : 222, won ? 300 : 260);
@@ -2094,6 +2158,11 @@ function drawResultHero(won, t) {
   }
   ctx.fillStyle = won ? "rgba(255, 218, 72, 0.56)" : "rgba(255, 54, 102, 0.54)";
   ctx.fillRect(cx - 70, cy + 150, 140, 10);
+}
+
+function resultHeroSprite() {
+  if (ONLINE.enabled && ONLINE.playerId === "p2") return actorSprites.ai;
+  return actorSprites.player;
 }
 
 function drawFallbackResultHero(cx, cy, won) {
@@ -2313,7 +2382,7 @@ function drawOnlineRoomPanel(stale) {
 }
 
 function drawOnlineBadge() {
-  const label = `${String(ONLINE.playerId || "P?").toUpperCase()} ONLINE`;
+  const label = `${String(ONLINE.playerId || "P?").toUpperCase()}${isMirroredView() ? " MIRROR" : " ONLINE"}`;
   const x = IS_PORTRAIT ? W - 146 : W - 176;
   const y = IS_PORTRAIT ? 18 : 22;
   const width = IS_PORTRAIT ? 128 : 150;
@@ -2342,7 +2411,7 @@ function onlineStatusText(stale) {
 function onlineRoleText() {
   if (ONLINE.role === "spectator") return "SPECTATOR";
   if (ONLINE.playerId === "p1") return "YOU CONTROL P1 BOTTOM";
-  if (ONLINE.playerId === "p2") return "YOU CONTROL P2 TOP";
+  if (ONLINE.playerId === "p2") return "MIRROR VIEW: P2 BOTTOM";
   return "JOINING ROOM";
 }
 
@@ -2439,6 +2508,18 @@ function drawCoverImage(image, x, y, width, height) {
   ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
 }
 
+function drawCoverImageForView(image, x, y, width, height) {
+  if (!isMirroredView()) {
+    drawCoverImage(image, x, y, width, height);
+    return;
+  }
+  ctx.save();
+  ctx.translate(x + width / 2, y + height / 2);
+  ctx.rotate(Math.PI);
+  drawCoverImage(image, -width / 2, -height / 2, width, height);
+  ctx.restore();
+}
+
 function drawCenteredImageContain(image, cx, cy, maxWidth, maxHeight) {
   const ratio = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
   const width = image.naturalWidth * ratio;
@@ -2498,10 +2579,11 @@ function drawWorldLine(x1, y1, x2, y2) {
 }
 
 function worldToScreen(x, y) {
-  const yNorm = (y - TUNING.world.yMin) / (TUNING.world.yMax - TUNING.world.yMin);
+  const view = worldToViewPoint(x, y);
+  const yNorm = (view.y - TUNING.world.yMin) / (TUNING.world.yMax - TUNING.world.yMin);
   const sy = lerp(COURT.top, COURT.bottom, yNorm);
-  const perspective = 1 + y * 0.012;
-  const sx = COURT.cx + x * COURT.baseScaleX * perspective;
+  const perspective = 1 + view.y * 0.012;
+  const sx = COURT.cx + view.x * COURT.baseScaleX * perspective;
   return { x: sx, y: sy };
 }
 
@@ -2510,7 +2592,7 @@ function screenToWorld(x, y) {
   const wy = lerp(TUNING.world.yMin, TUNING.world.yMax, yNorm);
   const perspective = 1 + wy * 0.012;
   const wx = (x - COURT.cx) / (COURT.baseScaleX * perspective);
-  return { x: wx, y: wy };
+  return viewToWorldPoint(wx, wy);
 }
 
 function previewResult(winner = "player") {
@@ -2536,6 +2618,10 @@ window.PixelTennis = {
   TUNING,
   reset: resetMatch,
   snapshot() {
+    const score = scoreView();
+    const playerScreen = worldToScreen(player.x, player.y);
+    const aiScreen = worldToScreen(ai.x, ai.y);
+    const ballScreen = worldToScreen(ball.x, ball.y);
     return {
       phase: state.phase,
       message: state.message,
@@ -2553,6 +2639,13 @@ window.PixelTennis = {
       player: { x: player.x, y: player.y },
       ai: { x: ai.x, y: ai.y },
       ball: { x: ball.x, y: ball.y, z: ball.z, inPlay: ball.inPlay },
+      view: {
+        mirrored: isMirroredView(),
+        score,
+        playerScreen,
+        aiScreen,
+        ballScreen,
+      },
       online: ONLINE.enabled
         ? {
             status: ONLINE.status,

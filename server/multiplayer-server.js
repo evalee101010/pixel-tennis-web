@@ -80,6 +80,8 @@ function emptyInput() {
     hit: false,
     special: false,
     aim: 0,
+    shotUp: false,
+    shotDown: false,
   };
 }
 
@@ -452,8 +454,8 @@ function hitQuality(ball, actor) {
 
 function chooseShot(input, useSpecial) {
   if (useSpecial) return SHOTS.special;
-  if (input.up) return SHOTS.lob;
-  if (input.down) return SHOTS.drop;
+  if (input.shotUp || (!("shotUp" in input) && input.up)) return SHOTS.lob;
+  if (input.shotDown || (!("shotDown" in input) && input.down)) return SHOTS.drop;
   if (input.hit && Math.abs(input.aim) > 0.72) return SHOTS.power;
   return SHOTS.normal;
 }
@@ -608,6 +610,8 @@ function handleMessage(client, raw) {
       hit: !!next.hit,
       special: !!next.special,
       aim: clamp(Number(next.aim) || 0, -1, 1),
+      shotUp: !!next.shotUp,
+      shotDown: !!next.shotDown,
     };
   } else if (message.type === "action") {
     if (message.action === "replay" || message.action === "continue") {

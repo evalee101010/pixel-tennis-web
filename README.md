@@ -26,7 +26,7 @@ Open `http://localhost:8787/?mode=online` to create a room, then share the room 
 http://localhost:8787/?mode=online&room=ABCD
 ```
 
-The room server owns movement, ball physics, scoring, match result, replay, and theme sync. P1 controls the bottom player, and P2 controls the top player.
+The room server owns movement, ball physics, scoring, match result, replay, and theme sync. P1 uses the default court view. P2 uses a mirrored local view, so each player sees themselves at the bottom while the server keeps one shared P1/P2 world state.
 
 ## Deploy
 
