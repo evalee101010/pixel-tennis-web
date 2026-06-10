@@ -1483,15 +1483,6 @@ function drawBackground() {
   ctx.strokeStyle = "rgba(247, 190, 83, 0.82)";
   ctx.lineWidth = 10;
   ctx.strokeRect(frameX, frameY, frameW, frameH);
-  ctx.strokeStyle = "rgba(210, 239, 211, 0.22)";
-  ctx.lineWidth = 2;
-  const fenceLines = IS_PORTRAIT ? 12 : 18;
-  for (let i = 0; i < fenceLines; i += 1) {
-    ctx.beginPath();
-    ctx.moveTo(frameX + 18 + i * (frameW / fenceLines), frameY + 10);
-    ctx.lineTo(frameX - 20 + i * (frameW / fenceLines), frameY + frameH - 10);
-    ctx.stroke();
-  }
 }
 
 function drawCourt() {
