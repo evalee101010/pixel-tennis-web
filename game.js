@@ -1460,11 +1460,11 @@ function render() {
 function drawBackground() {
   const image = themeImages[state.themeIndex];
   if (image && image.complete && image.naturalWidth) {
-    drawCoverImageForView(image, 0, 0, W, H);
+    drawCoverImage(image, 0, 0, W, H);
   } else {
     ctx.fillStyle = "#23351f";
     ctx.fillRect(0, 0, W, H);
-    drawStaticNoiseForView(noiseTiles.background);
+    drawStaticNoise(noiseTiles.background);
   }
   ctx.fillStyle = "rgba(4, 8, 12, 0.06)";
   ctx.fillRect(0, 0, W, H);
@@ -2511,19 +2511,6 @@ function drawStaticNoise(tiles) {
   }
 }
 
-function drawStaticNoiseForView(tiles) {
-  if (!isMirroredView()) {
-    drawStaticNoise(tiles);
-    return;
-  }
-  ctx.save();
-  ctx.translate(W / 2, H / 2);
-  ctx.rotate(Math.PI);
-  ctx.translate(-W / 2, -H / 2);
-  drawStaticNoise(tiles);
-  ctx.restore();
-}
-
 function drawCoverImage(image, x, y, width, height) {
   const imageRatio = image.naturalWidth / image.naturalHeight;
   const targetRatio = width / height;
@@ -2539,18 +2526,6 @@ function drawCoverImage(image, x, y, width, height) {
     sy = (image.naturalHeight - sh) / 2;
   }
   ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
-}
-
-function drawCoverImageForView(image, x, y, width, height) {
-  if (!isMirroredView()) {
-    drawCoverImage(image, x, y, width, height);
-    return;
-  }
-  ctx.save();
-  ctx.translate(x + width / 2, y + height / 2);
-  ctx.rotate(Math.PI);
-  drawCoverImage(image, -width / 2, -height / 2, width, height);
-  ctx.restore();
 }
 
 function drawCenteredImageContain(image, cx, cy, maxWidth, maxHeight) {
