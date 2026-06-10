@@ -433,7 +433,7 @@ function loadNetDebugModule(onReady) {
     return;
   }
   const script = document.createElement("script");
-  script.src = "./net-debug.js?v=net-debug-1";
+  script.src = "./net-debug.js?v=net-debug-2";
   script.onload = attach;
   script.onerror = onReady;
   document.head.appendChild(script);

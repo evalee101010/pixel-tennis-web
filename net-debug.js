@@ -147,6 +147,7 @@
       handlePong,
       handleState,
       handleDebug,
+      draw,
       summary,
       reset,
       recent: () => state.misses.slice(),
