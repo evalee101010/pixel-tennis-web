@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server/multiplayer-server.js",
-    "check": "node --check game.js && node --check server/multiplayer-server.js"
+    "check": "node --check game.js && node --check net-debug.js && node --check server/multiplayer-server.js"
   },
   "engines": {
     "node": ">=20"
