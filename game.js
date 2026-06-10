@@ -71,6 +71,7 @@ const IS_PORTRAIT = H > W;
 const URL_PARAMS = new URLSearchParams(window.location.search);
 const ONLINE_MODE = URL_PARAMS.get("mode") === "online";
 const DEBUG_NET = URL_PARAMS.get("debug") === "net";
+const ONLINE_PING_MS = 1200;
 const COURT = {
   cx: W / 2,
   top: IS_PORTRAIT ? 168 : 78,
@@ -90,6 +91,9 @@ const ONLINE = {
   role: null,
   lastInputSent: 0,
   lastInputAt: 0,
+  lastPingAt: 0,
+  lastPongAt: 0,
+  rttMs: null,
   reconnectAt: 0,
   snapshotAt: 0,
   message: "",
@@ -433,7 +437,7 @@ function loadNetDebugModule(onReady) {
     return;
   }
   const script = document.createElement("script");
-  script.src = "./net-debug.js?v=net-debug-2";
+  script.src = "./net-debug.js?v=net-debug-3";
   script.onload = attach;
   script.onerror = onReady;
   document.head.appendChild(script);
@@ -490,6 +494,11 @@ function handleOnlineMessage(raw) {
   if (packet.type === "state") {
     applyOnlineState(packet);
   } else if (packet.type === "pong") {
+    const sentAt = Number(packet.sentAt);
+    if (Number.isFinite(sentAt)) {
+      ONLINE.rttMs = Math.max(0, performance.now() - sentAt);
+    }
+    ONLINE.lastPongAt = performance.now();
     if (netDebug) netDebug.handlePong(packet, performance.now());
   } else if (packet.type === "debug") {
     if (netDebug) netDebug.handleDebug(packet, ONLINE.playerId, performance.now());
@@ -525,6 +534,7 @@ function onlineInputPayload() {
     aim: clamp(input.aim, -1, 1),
     shotUp: input.up || input.stick.y < -0.25,
     shotDown: input.down || input.stick.y > 0.25,
+    rttMs: ONLINE.rttMs === null ? null : Math.round(ONLINE.rttMs),
   };
   if (!isMirroredView()) return local;
   return {
@@ -547,8 +557,9 @@ function sendOnlineInput() {
 }
 
 function sendOnlinePing(now, force = false) {
-  if (!netDebug) return;
-  netDebug.maybePing(now, sendOnline, force);
+  if (!force && now - ONLINE.lastPingAt < ONLINE_PING_MS) return;
+  ONLINE.lastPingAt = now;
+  sendOnline({ type: "ping", sentAt: now });
 }
 
 function updateOnline(dt) {
@@ -2705,6 +2716,7 @@ window.PixelTennis = {
             role: ONLINE.role,
             serverUrl: ONLINE.serverUrl,
             snapshotAgeMs: ONLINE.snapshotAt ? Math.round(performance.now() - ONLINE.snapshotAt) : null,
+            rttMs: ONLINE.rttMs === null ? null : Math.round(ONLINE.rttMs),
             debug: netDebug ? netDebug.summary() : null,
           }
         : null,

@@ -38,6 +38,26 @@ const PLAYER = {
   goodRadius: 0.78,
 };
 
+const ONLINE_COMPENSATION = {
+  defaultRttMs: 140,
+  minRttMs: 70,
+  maxRttMs: 360,
+  hitGraceMinMs: 85,
+  hitGraceMaxMs: 180,
+  rewindMinMs: 70,
+  rewindMaxMs: 240,
+  radiusXMin: 0.08,
+  radiusXMax: 0.34,
+  radiusYMin: 0.1,
+  radiusYMax: 0.42,
+  sideGraceMin: 0.08,
+  sideGraceMax: 0.28,
+  reachZMin: 0.08,
+  reachZMax: 0.34,
+  lowZGrace: 0.08,
+  historyMs: 480,
+};
+
 const BALL = {
   gravity: 22,
   bounce: 0.68,
@@ -83,6 +103,10 @@ function emptyInput() {
     aim: 0,
     shotUp: false,
     shotDown: false,
+    rttMs: ONLINE_COMPENSATION.defaultRttMs,
+    hitUntil: 0,
+    specialUntil: 0,
+    inputAt: 0,
   };
 }
 
@@ -144,6 +168,7 @@ function makeRoom(id) {
     themeIndex: 0,
     result: null,
     lastBroadcast: 0,
+    ballHistory: [],
     debugMiss: {
       p1: { key: "", at: 0 },
       p2: { key: "", at: 0 },
@@ -241,6 +266,7 @@ function resetMatch(room, keepTheme = true) {
   room.inputs.p1 = emptyInput();
   room.inputs.p2 = emptyInput();
   room.ball = makeBall();
+  room.ballHistory = [];
   room.phase = "serveWait";
   room.timer = 0.9;
   room.message = "PLAYER 1 SERVE";
@@ -265,6 +291,7 @@ function startNextPoint(room) {
   room.message = `${room.server === "p1" ? "PLAYER 1" : "PLAYER 2"} SERVE`;
   room.messageSub = `ROOM ${room.id}`;
   room.rallyHits = 0;
+  room.ballHistory = [];
   room.pointWinner = null;
   placeBallForServe(room);
 }
@@ -312,9 +339,13 @@ function updateRoom(room, dt, now) {
     placeBallForServe(room);
     if (room.timer <= 0) serve(room);
   } else if (room.phase === "rally") {
+    rememberBall(room, now);
     updateBall(room, dt);
-    tryControlledHit(room, "p1", 1, now);
-    tryControlledHit(room, "p2", -1, now);
+    if (room.phase === "rally") {
+      rememberBall(room, now);
+      tryControlledHit(room, "p1", 1, now);
+      tryControlledHit(room, "p2", -1, now);
+    }
   } else if (room.phase === "pointOver") {
     room.timer -= dt;
     if (room.timer <= 0) startNextPoint(room);
@@ -410,25 +441,48 @@ function isLegalBounce(ball, expectedSide) {
   return sideOk && xOk && yOk;
 }
 
+function rememberBall(room, now) {
+  room.ballHistory.push({
+    at: now,
+    x: room.ball.x,
+    y: room.ball.y,
+    z: room.ball.z,
+    inPlay: room.ball.inPlay,
+  });
+  const cutoff = now - ONLINE_COMPENSATION.historyMs;
+  while (room.ballHistory.length && room.ballHistory[0].at < cutoff) {
+    room.ballHistory.shift();
+  }
+}
+
 function tryControlledHit(room, playerId, side, now) {
   const actor = room.players[playerId];
   const input = room.inputs[playerId];
-  if (!input.hit && !input.special) return;
-  const block = hitBlockReason(room, actor, playerId, side);
+  const wantsSpecial = input.special || now <= (input.specialUntil || 0);
+  const wantsHit = input.hit || wantsSpecial || now <= (input.hitUntil || 0);
+  if (!wantsHit) return;
+  const effectiveInput = {
+    ...input,
+    hit: true,
+    special: wantsSpecial,
+  };
+  const block = hitBlockReason(room, actor, playerId, side, now);
   if (block) {
     sendMissDebug(room, playerId, block, now);
     return;
   }
 
   const quality = hitQuality(room.ball, actor);
-  const useSpecial = input.special && actor.energy >= 100;
-  const shot = chooseShot(input, useSpecial);
-  const targetX = chooseTargetX(room, playerId, input, shot);
+  const useSpecial = effectiveInput.special && actor.energy >= 100;
+  const shot = chooseShot(effectiveInput, useSpecial);
+  const targetX = chooseTargetX(room, playerId, effectiveInput, shot);
   const targetY = chooseTargetY(side, shot);
   const errorScale = quality === "perfect" ? 0.32 : quality === "good" ? 0.78 : 1.38;
   const finalX = clamp(targetX + rand(-shot.error, shot.error) * errorScale, -4.02, 4.02);
   const finalY = clamp(targetY + rand(-shot.error, shot.error) * errorScale, -11.45, 11.45);
 
+  input.hitUntil = 0;
+  input.specialUntil = 0;
   room.lastHit = playerId;
   room.rallyHits += 1;
   room.maxRally = Math.max(room.maxRally, room.rallyHits);
@@ -443,53 +497,114 @@ function tryControlledHit(room, playerId, side, now) {
 }
 
 function canHit(room, actor, playerId, side) {
-  return !hitBlockReason(room, actor, playerId, side);
+  return !hitBlockReason(room, actor, playerId, side, Date.now());
 }
 
-function hitBlockReason(room, actor, playerId, side) {
+function hitBlockReason(room, actor, playerId, side, now) {
   const ball = room.ball;
-  const dx = Math.abs(ball.x - actor.x);
-  const dy = Math.abs(ball.y - actor.y);
   if (actor.cooldown > 0) {
     return {
       code: "cooldown",
       label: "COOLDOWN",
       cooldown: actor.cooldown,
-      dx,
-      dy,
+      dx: Math.abs(ball.x - actor.x),
+      dy: Math.abs(ball.y - actor.y),
       z: ball.z,
     };
   }
   if (!ball.inPlay) {
-    return { code: "ball_idle", label: "BALL NOT IN PLAY", dx, dy, z: ball.z };
+    return { code: "ball_idle", label: "BALL NOT IN PLAY", dx: 0, dy: 0, z: ball.z };
   }
   if (room.lastHit === playerId) {
-    return { code: "same_player", label: "ALREADY HIT", dx, dy, z: ball.z };
-  }
-  if (side > 0 && ball.y < 0.1) {
-    return { code: "wrong_side", label: "BALL ON RIVAL SIDE", dx, dy, z: ball.z };
-  }
-  if (side < 0 && ball.y > -0.1) {
-    return { code: "wrong_side", label: "BALL ON RIVAL SIDE", dx, dy, z: ball.z };
-  }
-  if (ball.z > PLAYER.reachZ) {
-    return { code: "too_high", label: "BALL TOO HIGH", dx, dy, z: ball.z };
-  }
-  if (ball.z < 0.02) {
-    return { code: "too_low", label: "BALL TOO LOW", dx, dy, z: ball.z };
-  }
-  if (dx > PLAYER.hitRadiusX || dy > PLAYER.hitRadiusY) {
     return {
-      code: dx > PLAYER.hitRadiusX ? "x_far" : "y_far",
-      label: dx > PLAYER.hitRadiusX ? "X TOO FAR" : "Y TOO FAR",
-      dx,
-      dy,
+      code: "same_player",
+      label: "ALREADY HIT",
+      dx: Math.abs(ball.x - actor.x),
+      dy: Math.abs(ball.y - actor.y),
       z: ball.z,
-      limitX: PLAYER.hitRadiusX,
-      limitY: PLAYER.hitRadiusY,
     };
   }
+  const compensation = onlineHitCompensation(room, playerId);
+  const block = hitGeometryBlock(ball, actor, side, compensation);
+  if (!block) return null;
+  if (recentCompensatedHit(room, actor, side, now, compensation)) return null;
+  return block;
+}
+
+function hitGeometryBlock(ball, actor, side, compensation) {
+  const dx = Math.abs(ball.x - actor.x);
+  const dy = Math.abs(ball.y - actor.y);
+  if (side > 0 && ball.y < 0.1 - compensation.sideGrace) {
+    return compensatedBlock("wrong_side", "BALL ON RIVAL SIDE", dx, dy, ball.z, compensation);
+  }
+  if (side < 0 && ball.y > -0.1 + compensation.sideGrace) {
+    return compensatedBlock("wrong_side", "BALL ON RIVAL SIDE", dx, dy, ball.z, compensation);
+  }
+  if (ball.z > compensation.reachZ) {
+    return compensatedBlock("too_high", "BALL TOO HIGH", dx, dy, ball.z, compensation);
+  }
+  if (ball.z < -compensation.lowZGrace) {
+    return compensatedBlock("too_low", "BALL TOO LOW", dx, dy, ball.z, compensation);
+  }
+  if (dx > compensation.limitX || dy > compensation.limitY) {
+    return compensatedBlock(
+      dx > compensation.limitX ? "x_far" : "y_far",
+      dx > compensation.limitX ? "X TOO FAR" : "Y TOO FAR",
+      dx,
+      dy,
+      ball.z,
+      compensation,
+    );
+  }
   return null;
+}
+
+function compensatedBlock(code, label, dx, dy, z, compensation) {
+  return {
+    code,
+    label,
+    dx,
+    dy,
+    z,
+    limitX: compensation.limitX,
+    limitY: compensation.limitY,
+    rttMs: compensation.rttMs,
+    rewindMs: compensation.rewindMs,
+  };
+}
+
+function recentCompensatedHit(room, actor, side, now, compensation) {
+  const cutoff = now - compensation.rewindMs;
+  for (let i = room.ballHistory.length - 1; i >= 0; i -= 1) {
+    const pastBall = room.ballHistory[i];
+    if (pastBall.at < cutoff) break;
+    if (!pastBall.inPlay) continue;
+    if (!hitGeometryBlock(pastBall, actor, side, compensation)) return true;
+  }
+  return false;
+}
+
+function onlineHitCompensation(room, playerId) {
+  const input = room.inputs[playerId] || emptyInput();
+  const client = room.clients.get(playerId);
+  const reportedRtt = Number(input.rttMs || client?.rttMs);
+  const rttMs = clamp(
+    Number.isFinite(reportedRtt) && reportedRtt > 0 ? reportedRtt : ONLINE_COMPENSATION.defaultRttMs,
+    ONLINE_COMPENSATION.minRttMs,
+    ONLINE_COMPENSATION.maxRttMs,
+  );
+  const t = (rttMs - ONLINE_COMPENSATION.minRttMs) /
+    (ONLINE_COMPENSATION.maxRttMs - ONLINE_COMPENSATION.minRttMs);
+  return {
+    rttMs,
+    hitGraceMs: Math.round(lerp(ONLINE_COMPENSATION.hitGraceMinMs, ONLINE_COMPENSATION.hitGraceMaxMs, t)),
+    rewindMs: Math.round(lerp(ONLINE_COMPENSATION.rewindMinMs, ONLINE_COMPENSATION.rewindMaxMs, t)),
+    limitX: PLAYER.hitRadiusX + lerp(ONLINE_COMPENSATION.radiusXMin, ONLINE_COMPENSATION.radiusXMax, t),
+    limitY: PLAYER.hitRadiusY + lerp(ONLINE_COMPENSATION.radiusYMin, ONLINE_COMPENSATION.radiusYMax, t),
+    sideGrace: lerp(ONLINE_COMPENSATION.sideGraceMin, ONLINE_COMPENSATION.sideGraceMax, t),
+    reachZ: PLAYER.reachZ + lerp(ONLINE_COMPENSATION.reachZMin, ONLINE_COMPENSATION.reachZMax, t),
+    lowZGrace: ONLINE_COMPENSATION.lowZGrace,
+  };
 }
 
 function sendMissDebug(room, playerId, block, now) {
@@ -512,6 +627,8 @@ function sendMissDebug(room, playerId, block, now) {
     limitX: round2(block.limitX || PLAYER.hitRadiusX),
     limitY: round2(block.limitY || PLAYER.hitRadiusY),
     cooldown: round2(block.cooldown || 0),
+    rttMs: Math.round(block.rttMs || 0),
+    rewindMs: Math.round(block.rewindMs || 0),
   });
 }
 
@@ -689,16 +806,34 @@ function handleMessage(client, raw) {
 
   if (message.type === "input") {
     const next = message.input || {};
+    const previous = room.inputs[client.playerId] || emptyInput();
+    const now = Date.now();
+    const reportedRtt = Number(next.rttMs);
+    const rttMs = clamp(
+      Number.isFinite(reportedRtt) && reportedRtt > 0 ? reportedRtt : client.rttMs || ONLINE_COMPENSATION.defaultRttMs,
+      ONLINE_COMPENSATION.minRttMs,
+      ONLINE_COMPENSATION.maxRttMs,
+    );
+    client.rttMs = rttMs;
+    const tempInput = { ...previous, rttMs };
+    room.inputs[client.playerId] = tempInput;
+    const compensation = onlineHitCompensation(room, client.playerId);
+    const hit = !!next.hit;
+    const special = !!next.special;
     room.inputs[client.playerId] = {
       left: !!next.left,
       right: !!next.right,
       up: !!next.up,
       down: !!next.down,
-      hit: !!next.hit,
-      special: !!next.special,
+      hit,
+      special,
       aim: clamp(Number(next.aim) || 0, -1, 1),
       shotUp: !!next.shotUp,
       shotDown: !!next.shotDown,
+      rttMs,
+      hitUntil: hit ? Math.max(previous.hitUntil || 0, now + compensation.hitGraceMs) : previous.hitUntil || 0,
+      specialUntil: special ? Math.max(previous.specialUntil || 0, now + compensation.hitGraceMs) : previous.specialUntil || 0,
+      inputAt: now,
     };
   } else if (message.type === "action") {
     if (message.action === "replay" || message.action === "continue") {
@@ -869,6 +1004,7 @@ server.on("upgrade", (request, socket) => {
     buffer: Buffer.alloc(0),
     isAlive: true,
     debugNet: false,
+    rttMs: ONLINE_COMPENSATION.defaultRttMs,
   };
   connections.add(client);
   socket.setNoDelay(true);

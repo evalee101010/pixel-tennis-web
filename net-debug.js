@@ -35,6 +35,7 @@
       if (Number.isFinite(sentAt)) state.rttMs = Math.max(0, now - sentAt);
       state.lastPongAt = now;
       state.serverTime = Number(packet.serverTime) || state.serverTime;
+      publishSummary();
     }
 
     function handleState(packet) {
@@ -55,6 +56,8 @@
         limitX: safeNumber(packet.limitX),
         limitY: safeNumber(packet.limitY),
         cooldown: safeNumber(packet.cooldown),
+        rttMs: safeNumber(packet.rttMs),
+        rewindMs: safeNumber(packet.rewindMs),
       };
       state.lastDebug = miss;
       state.lastDebugAt = now;
@@ -71,6 +74,7 @@
         state.totals.dy -= removed.dy || 0;
         state.totals.z -= removed.z || 0;
       }
+      publishSummary();
     }
 
     function summary() {
@@ -100,6 +104,19 @@
       state.totals.dx = 0;
       state.totals.dy = 0;
       state.totals.z = 0;
+      publishSummary();
+    }
+
+    function publishSummary() {
+      if (typeof document === "undefined" || !document.body) return;
+      let output = document.getElementById("pixel-tennis-net-debug-summary");
+      if (!output) {
+        output = document.createElement("pre");
+        output.id = "pixel-tennis-net-debug-summary";
+        output.hidden = true;
+        document.body.appendChild(output);
+      }
+      output.textContent = JSON.stringify(summary());
     }
 
     function draw(ctx, view) {

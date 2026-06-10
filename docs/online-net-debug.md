@@ -32,7 +32,7 @@ The debug UI is isolated in `net-debug.js`, which is loaded dynamically only whe
 The main game keeps only small hooks:
 
 - include `debug: true` in the online join message
-- send a periodic ping through the existing WebSocket
+- send a periodic ping through the existing WebSocket so online play can report RTT
 - forward pong/state/debug packets to the optional debug module
 - ask the optional module to draw its small overlay
 
@@ -41,6 +41,7 @@ The server keeps lightweight instrumentation:
 - `serverTime` in state packets
 - `ping` -> `pong`
 - miss reason events for debug clients only
+- online-only hit compensation based on reported RTT, a short swing grace window, and recent ball-position history
 
 ## What to look at
 
@@ -50,6 +51,12 @@ Useful console call:
 
 ```js
 PixelTennisDebug.summary()
+```
+
+The same summary is mirrored into a hidden DOM node when `debug=net` is active:
+
+```js
+document.getElementById("pixel-tennis-net-debug-summary")?.textContent
 ```
 
 Important fields:
@@ -99,6 +106,8 @@ For a production-clean build, delete:
 - `net-debug.js`
 - this document
 - `DEBUG_NET`, `loadNetDebugModule`, and the `netDebug` hook calls in `game.js`
-- debug-only `ping`, `pong`, `serverTime`, and miss-event code in `server/multiplayer-server.js` if no longer needed
+- debug-only miss-event code in `server/multiplayer-server.js` if no longer needed
+
+Do not remove `ping`/`pong` unless online hit compensation no longer needs RTT.
 
 Because the front-end diagnostics live in a separate file and load only with `debug=net`, normal game payload impact stays small.
