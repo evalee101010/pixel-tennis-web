@@ -12,6 +12,7 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const TICK_MS = 1000 / 60;
 const BROADCAST_MS = 1000 / 24;
+const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS || 30000);
 
 const WORLD = {
   xMin: -5.2,
@@ -629,6 +630,11 @@ function sendJson(client, data) {
   client.socket.write(encodeFrame(JSON.stringify(data)));
 }
 
+function sendPing(client) {
+  if (!client.socket.writable) return;
+  client.socket.write(Buffer.from([0x89, 0x00]));
+}
+
 function encodeFrame(text) {
   const payload = Buffer.from(text);
   const length = payload.length;
@@ -677,7 +683,13 @@ function decodeFrames(client, chunk) {
       return messages;
     }
     if (opcode === 0x9) {
+      client.isAlive = true;
       client.socket.write(Buffer.from([0x8a, 0x00]));
+      client.buffer = client.buffer.slice(offset + length);
+      continue;
+    }
+    if (opcode === 0x0a) {
+      client.isAlive = true;
       client.buffer = client.buffer.slice(offset + length);
       continue;
     }
@@ -686,7 +698,10 @@ function decodeFrames(client, chunk) {
       const mask = client.buffer.slice(maskOffset, maskOffset + 4);
       payload = Buffer.from(payload.map((byte, index) => byte ^ mask[index % 4]));
     }
-    if (opcode === 0x1) messages.push(payload.toString("utf8"));
+    if (opcode === 0x1) {
+      client.isAlive = true;
+      messages.push(payload.toString("utf8"));
+    }
     client.buffer = client.buffer.slice(offset + length);
   }
   return messages;
@@ -766,8 +781,10 @@ server.on("upgrade", (request, socket) => {
     room: null,
     playerId: null,
     buffer: Buffer.alloc(0),
+    isAlive: true,
   };
   connections.add(client);
+  socket.setNoDelay(true);
   socket.on("data", (chunk) => {
     for (const message of decodeFrames(client, chunk)) {
       handleMessage(client, message);
@@ -789,6 +806,19 @@ setInterval(() => {
     updateRoom(room, TICK_MS / 1000, now);
   }
 }, TICK_MS);
+
+setInterval(() => {
+  for (const client of connections) {
+    if (!client.socket.writable || client.isAlive === false) {
+      client.socket.destroy();
+      leaveRoom(client);
+      connections.delete(client);
+      continue;
+    }
+    client.isAlive = false;
+    sendPing(client);
+  }
+}, HEARTBEAT_MS);
 
 server.listen(PORT, HOST, () => {
   console.log(`Pixel Tennis multiplayer server running at http://localhost:${PORT}`);

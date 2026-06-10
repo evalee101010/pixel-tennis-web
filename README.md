@@ -12,6 +12,14 @@ python3 -m http.server 4173
 
 Open `http://localhost:4173/`.
 
+For the online multiplayer room server:
+
+```sh
+npm start
+```
+
+Open `http://localhost:8787/?mode=online`.
+
 ## Online Multiplayer Prototype
 
 Single-player stays as the default static page. To try the online room prototype locally, run the WebSocket room server:

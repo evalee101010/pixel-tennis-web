@@ -376,14 +376,28 @@ function setTheme(index) {
 
 function onlineServerUrl() {
   const explicit = URL_PARAMS.get("server");
-  if (explicit) return explicit;
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+  if (explicit) return normalizeWebSocketUrl(explicit);
+  if (location.protocol === "https:") {
+    return `wss://${location.host}/ws`;
+  }
+  if (
+    (location.hostname === "localhost" || location.hostname === "127.0.0.1") &&
+    (!location.port || location.port === "4173")
+  ) {
     return "ws://localhost:8787/ws";
   }
   if (location.protocol === "http:" && location.host) {
     return `ws://${location.host}/ws`;
   }
   return "";
+}
+
+function normalizeWebSocketUrl(value) {
+  const text = String(value || "").trim();
+  if (text.startsWith("wss://") || text.startsWith("ws://")) return text;
+  if (text.startsWith("https://")) return `wss://${text.slice("https://".length)}`;
+  if (text.startsWith("http://")) return `ws://${text.slice("http://".length)}`;
+  return text;
 }
 
 function initOnlineMode() {
@@ -1450,7 +1464,7 @@ function drawBackground() {
   } else {
     ctx.fillStyle = "#23351f";
     ctx.fillRect(0, 0, W, H);
-    drawStaticNoise(noiseTiles.background);
+    drawStaticNoiseForView(noiseTiles.background);
   }
   ctx.fillStyle = "rgba(4, 8, 12, 0.06)";
   ctx.fillRect(0, 0, W, H);
@@ -1523,23 +1537,26 @@ function drawCourtLines() {
 function drawNet() {
   const theme = currentTheme();
   const ui = uiSprites[theme.id];
-  const left = worldToScreen(-5.25, 0);
-  const right = worldToScreen(5.25, 0);
-  const y = left.y;
+  const a = worldToScreen(-5.25, 0);
+  const b = worldToScreen(5.25, 0);
+  const left = Math.min(a.x, b.x);
+  const right = Math.max(a.x, b.x);
+  const y = (a.y + b.y) / 2;
+  const span = right - left;
   if (ui?.net?.complete && ui.net.naturalWidth) {
-    const width = right.x - left.x + (IS_PORTRAIT ? 54 : 72);
+    const width = span + (IS_PORTRAIT ? 54 : 72);
     const height = IS_PORTRAIT ? 86 : 92;
-    ctx.drawImage(ui.net, left.x - (width - (right.x - left.x)) / 2, y - height / 2, width, height);
+    ctx.drawImage(ui.net, left - (width - span) / 2, y - height / 2, width, height);
     return;
   }
   ctx.fillStyle = "rgba(8, 15, 18, 0.78)";
-  ctx.fillRect(left.x - 7, y - 19, right.x - left.x + 14, 42);
+  ctx.fillRect(left - 7, y - 19, span + 14, 42);
   ctx.strokeStyle = "#071113";
   ctx.lineWidth = 5;
-  ctx.strokeRect(left.x - 7, y - 19, right.x - left.x + 14, 42);
+  ctx.strokeRect(left - 7, y - 19, span + 14, 42);
   ctx.strokeStyle = theme.court.net;
   ctx.lineWidth = 2;
-  for (let x = left.x; x <= right.x; x += 12) {
+  for (let x = left; x <= right; x += 12) {
     ctx.beginPath();
     ctx.moveTo(x, y - 18);
     ctx.lineTo(x + 2, y + 22);
@@ -1547,16 +1564,16 @@ function drawNet() {
   }
   for (let yy = y - 14; yy <= y + 17; yy += 9) {
     ctx.beginPath();
-    ctx.moveTo(left.x - 5, yy);
-    ctx.lineTo(right.x + 5, yy);
+    ctx.moveTo(left - 5, yy);
+    ctx.lineTo(right + 5, yy);
     ctx.stroke();
   }
   ctx.fillStyle = "#cfe9b5";
-  ctx.fillRect(left.x - 12, y - 28, 12, 58);
-  ctx.fillRect(right.x, y - 28, 12, 58);
+  ctx.fillRect(left - 12, y - 28, 12, 58);
+  ctx.fillRect(right, y - 28, 12, 58);
   ctx.fillStyle = "#0f1714";
-  ctx.fillRect(left.x - 9, y - 25, 6, 54);
-  ctx.fillRect(right.x + 3, y - 25, 6, 54);
+  ctx.fillRect(left - 9, y - 25, 6, 54);
+  ctx.fillRect(right + 3, y - 25, 6, 54);
 }
 
 function drawWorldObjects() {
@@ -1572,6 +1589,7 @@ function drawBench() {
   const p = worldToScreen(5.85, -4.9);
   ctx.save();
   ctx.translate(p.x, p.y);
+  if (isMirroredView()) ctx.rotate(Math.PI);
   ctx.fillStyle = "#1b1812";
   ctx.fillRect(-4, -8, 56, 72);
   ctx.fillStyle = "#c07628";
@@ -1594,6 +1612,7 @@ function drawBallCart() {
   const p = worldToScreen(5.7, 4.55);
   ctx.save();
   ctx.translate(p.x, p.y);
+  if (isMirroredView()) ctx.rotate(Math.PI);
   ctx.fillStyle = "#15191b";
   ctx.fillRect(-20, -34, 55, 66);
   ctx.strokeStyle = "#91bec4";
@@ -1613,6 +1632,7 @@ function drawChair() {
   const p = worldToScreen(-5.8, 4.2);
   ctx.save();
   ctx.translate(p.x, p.y);
+  if (isMirroredView()) ctx.rotate(Math.PI);
   ctx.strokeStyle = "#101417";
   ctx.lineWidth = 8;
   ctx.beginPath();
@@ -2489,6 +2509,19 @@ function drawStaticNoise(tiles) {
     ctx.fillStyle = tile.color;
     ctx.fillRect(tile.x, tile.y, tile.size, tile.size);
   }
+}
+
+function drawStaticNoiseForView(tiles) {
+  if (!isMirroredView()) {
+    drawStaticNoise(tiles);
+    return;
+  }
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(Math.PI);
+  ctx.translate(-W / 2, -H / 2);
+  drawStaticNoise(tiles);
+  ctx.restore();
 }
 
 function drawCoverImage(image, x, y, width, height) {

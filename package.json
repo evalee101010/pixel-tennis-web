@@ -1,0 +1,13 @@
+{
+  "name": "pixel-tennis-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/multiplayer-server.js",
+    "check": "node --check game.js && node --check server/multiplayer-server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
