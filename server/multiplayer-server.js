@@ -144,6 +144,10 @@ function makeRoom(id) {
     themeIndex: 0,
     result: null,
     lastBroadcast: 0,
+    debugMiss: {
+      p1: { key: "", at: 0 },
+      p2: { key: "", at: 0 },
+    },
   };
   placeBallForServe(room);
   rooms.set(id, room);
@@ -309,8 +313,8 @@ function updateRoom(room, dt, now) {
     if (room.timer <= 0) serve(room);
   } else if (room.phase === "rally") {
     updateBall(room, dt);
-    tryControlledHit(room, "p1", 1);
-    tryControlledHit(room, "p2", -1);
+    tryControlledHit(room, "p1", 1, now);
+    tryControlledHit(room, "p2", -1, now);
   } else if (room.phase === "pointOver") {
     room.timer -= dt;
     if (room.timer <= 0) startNextPoint(room);
@@ -406,11 +410,15 @@ function isLegalBounce(ball, expectedSide) {
   return sideOk && xOk && yOk;
 }
 
-function tryControlledHit(room, playerId, side) {
+function tryControlledHit(room, playerId, side, now) {
   const actor = room.players[playerId];
   const input = room.inputs[playerId];
-  if ((!input.hit && !input.special) || actor.cooldown > 0) return;
-  if (!canHit(room, actor, playerId, side)) return;
+  if (!input.hit && !input.special) return;
+  const block = hitBlockReason(room, actor, playerId, side);
+  if (block) {
+    sendMissDebug(room, playerId, block, now);
+    return;
+  }
 
   const quality = hitQuality(room.ball, actor);
   const useSpecial = input.special && actor.energy >= 100;
@@ -435,13 +443,80 @@ function tryControlledHit(room, playerId, side) {
 }
 
 function canHit(room, actor, playerId, side) {
+  return !hitBlockReason(room, actor, playerId, side);
+}
+
+function hitBlockReason(room, actor, playerId, side) {
   const ball = room.ball;
-  if (!ball.inPlay) return false;
-  if (room.lastHit === playerId) return false;
-  if (side > 0 && ball.y < 0.1) return false;
-  if (side < 0 && ball.y > -0.1) return false;
-  if (ball.z > PLAYER.reachZ || ball.z < 0.02) return false;
-  return Math.abs(ball.x - actor.x) <= PLAYER.hitRadiusX && Math.abs(ball.y - actor.y) <= PLAYER.hitRadiusY;
+  const dx = Math.abs(ball.x - actor.x);
+  const dy = Math.abs(ball.y - actor.y);
+  if (actor.cooldown > 0) {
+    return {
+      code: "cooldown",
+      label: "COOLDOWN",
+      cooldown: actor.cooldown,
+      dx,
+      dy,
+      z: ball.z,
+    };
+  }
+  if (!ball.inPlay) {
+    return { code: "ball_idle", label: "BALL NOT IN PLAY", dx, dy, z: ball.z };
+  }
+  if (room.lastHit === playerId) {
+    return { code: "same_player", label: "ALREADY HIT", dx, dy, z: ball.z };
+  }
+  if (side > 0 && ball.y < 0.1) {
+    return { code: "wrong_side", label: "BALL ON RIVAL SIDE", dx, dy, z: ball.z };
+  }
+  if (side < 0 && ball.y > -0.1) {
+    return { code: "wrong_side", label: "BALL ON RIVAL SIDE", dx, dy, z: ball.z };
+  }
+  if (ball.z > PLAYER.reachZ) {
+    return { code: "too_high", label: "BALL TOO HIGH", dx, dy, z: ball.z };
+  }
+  if (ball.z < 0.02) {
+    return { code: "too_low", label: "BALL TOO LOW", dx, dy, z: ball.z };
+  }
+  if (dx > PLAYER.hitRadiusX || dy > PLAYER.hitRadiusY) {
+    return {
+      code: dx > PLAYER.hitRadiusX ? "x_far" : "y_far",
+      label: dx > PLAYER.hitRadiusX ? "X TOO FAR" : "Y TOO FAR",
+      dx,
+      dy,
+      z: ball.z,
+      limitX: PLAYER.hitRadiusX,
+      limitY: PLAYER.hitRadiusY,
+    };
+  }
+  return null;
+}
+
+function sendMissDebug(room, playerId, block, now) {
+  const client = room.clients.get(playerId);
+  if (!client || !client.debugNet) return;
+  const key = `${block.code}:${Math.round((block.dx || 0) * 10)}:${Math.round((block.dy || 0) * 10)}:${Math.round((block.z || 0) * 10)}`;
+  const last = room.debugMiss[playerId] || { key: "", at: 0 };
+  if (last.key === key && now - last.at < 240) return;
+  if (now - last.at < 90) return;
+  room.debugMiss[playerId] = { key, at: now };
+  sendJson(client, {
+    type: "debug",
+    event: "miss",
+    serverTime: now,
+    reason: block.label,
+    code: block.code,
+    dx: round2(block.dx || 0),
+    dy: round2(block.dy || 0),
+    z: round2(block.z || 0),
+    limitX: round2(block.limitX || PLAYER.hitRadiusX),
+    limitY: round2(block.limitY || PLAYER.hitRadiusY),
+    cooldown: round2(block.cooldown || 0),
+  });
+}
+
+function round2(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function hitQuality(ball, actor) {
@@ -534,6 +609,7 @@ function applyGameScore(room) {
 }
 
 function snapshotRoom(room) {
+  const now = Date.now();
   return {
     type: "state",
     room: room.id,
@@ -558,7 +634,8 @@ function snapshotRoom(room) {
     maxRally: room.maxRally,
     themeIndex: room.themeIndex,
     result: room.result,
-    updatedAt: Date.now(),
+    serverTime: now,
+    updatedAt: now,
   };
 }
 
@@ -590,7 +667,16 @@ function handleMessage(client, raw) {
     sendJson(client, { type: "error", message: "Invalid JSON" });
     return;
   }
+  if (message.type === "ping") {
+    sendJson(client, {
+      type: "pong",
+      sentAt: message.sentAt,
+      serverTime: Date.now(),
+    });
+    return;
+  }
   if (message.type === "join") {
+    client.debugNet = !!message.debug;
     joinRoom(client, message.room);
     return;
   }
@@ -782,6 +868,7 @@ server.on("upgrade", (request, socket) => {
     playerId: null,
     buffer: Buffer.alloc(0),
     isAlive: true,
+    debugNet: false,
   };
   connections.add(client);
   socket.setNoDelay(true);

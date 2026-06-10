@@ -70,6 +70,7 @@ const H = canvas.height;
 const IS_PORTRAIT = H > W;
 const URL_PARAMS = new URLSearchParams(window.location.search);
 const ONLINE_MODE = URL_PARAMS.get("mode") === "online";
+const DEBUG_NET = URL_PARAMS.get("debug") === "net";
 const COURT = {
   cx: W / 2,
   top: IS_PORTRAIT ? 168 : 78,
@@ -88,8 +89,16 @@ const ONLINE = {
   playerId: null,
   role: null,
   lastInputSent: 0,
+  lastInputAt: 0,
   reconnectAt: 0,
   snapshotAt: 0,
+  lastPingAt: 0,
+  lastPongAt: 0,
+  rttMs: null,
+  serverTime: null,
+  stateCount: 0,
+  lastDebug: null,
+  lastDebugAt: 0,
   message: "",
 };
 
@@ -421,7 +430,8 @@ function connectOnline() {
     socket.addEventListener("open", () => {
       ONLINE.status = "connected";
       ONLINE.message = "";
-      sendOnline({ type: "join", room: ONLINE.room });
+      sendOnline({ type: "join", room: ONLINE.room, debug: DEBUG_NET });
+      sendOnlinePing(performance.now(), true);
     });
     socket.addEventListener("message", (event) => {
       handleOnlineMessage(event.data);
@@ -459,6 +469,10 @@ function handleOnlineMessage(raw) {
   }
   if (packet.type === "state") {
     applyOnlineState(packet);
+  } else if (packet.type === "pong") {
+    handleOnlinePong(packet);
+  } else if (packet.type === "debug") {
+    handleOnlineDebug(packet);
   } else if (packet.type === "error") {
     ONLINE.message = packet.message || "ONLINE ERROR";
   }
@@ -507,7 +521,33 @@ function sendOnlineInput() {
   const now = performance.now();
   if (now - ONLINE.lastInputSent < 38) return;
   ONLINE.lastInputSent = now;
-  sendOnline({ type: "input", input: onlineInputPayload() });
+  if (sendOnline({ type: "input", input: onlineInputPayload() })) {
+    ONLINE.lastInputAt = now;
+  }
+}
+
+function sendOnlinePing(now, force = false) {
+  if (!DEBUG_NET) return;
+  if (!force && now - ONLINE.lastPingAt < 1200) return;
+  ONLINE.lastPingAt = now;
+  sendOnline({ type: "ping", sentAt: now });
+}
+
+function handleOnlinePong(packet) {
+  if (!DEBUG_NET) return;
+  const now = performance.now();
+  const sentAt = Number(packet.sentAt);
+  if (Number.isFinite(sentAt)) {
+    ONLINE.rttMs = Math.max(0, now - sentAt);
+  }
+  ONLINE.lastPongAt = now;
+  ONLINE.serverTime = Number(packet.serverTime) || ONLINE.serverTime;
+}
+
+function handleOnlineDebug(packet) {
+  if (!DEBUG_NET) return;
+  ONLINE.lastDebug = packet;
+  ONLINE.lastDebugAt = performance.now();
 }
 
 function updateOnline(dt) {
@@ -520,6 +560,7 @@ function updateOnline(dt) {
   updateActorCooldowns(player, dt);
   updateActorCooldowns(ai, dt);
   const now = performance.now();
+  sendOnlinePing(now);
   if ((ONLINE.status === "disconnected" || ONLINE.status === "error") && now > ONLINE.reconnectAt) {
     connectOnline();
   }
@@ -527,6 +568,8 @@ function updateOnline(dt) {
 
 function applyOnlineState(packet) {
   ONLINE.snapshotAt = performance.now();
+  ONLINE.serverTime = Number(packet.serverTime) || Number(packet.updatedAt) || ONLINE.serverTime;
+  ONLINE.stateCount += 1;
   ONLINE.room = packet.room || ONLINE.room;
   state.phase = packet.phase || "waiting";
   state.timer = packet.timer ?? 0;
@@ -2364,6 +2407,7 @@ function drawOnlineStatus() {
   } else {
     drawOnlineBadge();
   }
+  if (DEBUG_NET) drawNetDebugPanel(stale);
 }
 
 function drawOnlineRoomPanel(stale) {
@@ -2405,6 +2449,50 @@ function drawOnlineBadge() {
   ctx.strokeRect(x, y, width, 30);
   pixelText(label, x + 12, y + 21, 13, "#baf7ff");
   ctx.restore();
+}
+
+function drawNetDebugPanel(stale) {
+  const now = performance.now();
+  const box = IS_PORTRAIT
+    ? { x: 14, y: 456, width: 258, height: 132 }
+    : { x: 18, y: 186, width: 286, height: 132 };
+  const stateAge = ONLINE.snapshotAt ? `${Math.round(now - ONLINE.snapshotAt)}ms` : "--";
+  const rtt = ONLINE.rttMs === null ? "--" : `${Math.round(ONLINE.rttMs)}ms`;
+  const inputAge = ONLINE.lastInputAt ? `${Math.round(now - ONLINE.lastInputAt)}ms` : "--";
+  const pongAge = ONLINE.lastPongAt ? `${Math.round(now - ONLINE.lastPongAt)}ms` : "--";
+  const role = String(ONLINE.playerId || "P?").toUpperCase();
+  const room = ONLINE.room || "--";
+  const missFresh = ONLINE.lastDebug && now - ONLINE.lastDebugAt < 5200;
+  const miss = missFresh ? ONLINE.lastDebug : null;
+
+  ctx.save();
+  ctx.fillStyle = "rgba(3, 8, 12, 0.78)";
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeStyle = stale ? "rgba(255, 92, 92, 0.88)" : "rgba(80, 245, 255, 0.76)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = "rgba(25, 74, 82, 0.42)";
+  ctx.fillRect(box.x + 6, box.y + 6, box.width - 12, 22);
+
+  pixelText("NET DEBUG", box.x + 12, box.y + 23, 12, "#d9fbff");
+  pixelText(`ROOM ${room} ${role}`, box.x + 12, box.y + 45, 11, "#fff0a6");
+  pixelText(`RTT ${rtt}  STATE ${stateAge}`, box.x + 12, box.y + 63, 11, "#aef5ff");
+  pixelText(`INPUT ${inputAge}  PONG ${pongAge}`, box.x + 12, box.y + 81, 11, "#b8e5ff");
+  pixelText(`PACKETS ${ONLINE.stateCount}`, box.x + 12, box.y + 99, 11, "#c7ffc6");
+  if (miss) {
+    pixelText(`MISS ${miss.reason || miss.code || "--"}`, box.x + 12, box.y + 117, 10, "#ffd27a");
+    const detail = `DX ${fmtDebugNumber(miss.dx)}/${fmtDebugNumber(miss.limitX)} DY ${fmtDebugNumber(miss.dy)}/${fmtDebugNumber(miss.limitY)} Z ${fmtDebugNumber(miss.z)}`;
+    pixelText(detail, box.x + 12, box.y + 129, 9, "#ffb5a8");
+  } else {
+    pixelText("MISS --", box.x + 12, box.y + 117, 10, "#8ea4ad");
+  }
+  ctx.restore();
+}
+
+function fmtDebugNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return number.toFixed(1);
 }
 
 function onlineStatusText(stale) {
