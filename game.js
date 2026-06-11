@@ -99,6 +99,55 @@ const ONLINE = {
   message: "",
 };
 
+// --- Online presentation-layer netcode -------------------------------------
+// Tuning for client prediction, interpolation, and dead reckoning.
+const NET_TUNE = {
+  interpDelayMs: 110, // remote player rendered slightly in the past for smooth lerp
+  maxExtrapolateMs: 250,
+  snapDist: 1.6, // prediction error beyond this snaps instead of smoothing
+  correctRate: 12, // exponential rate at which prediction error bleeds away
+  inputResendMs: 50, // keepalive resend cadence when input is unchanged
+  redundantInputs: 3, // recent inputs piggybacked on each packet (loss masking)
+};
+
+// Server movement/ball constants mirrored locally for prediction.
+// Keep in sync with server/multiplayer-server.js (PLAYER / WORLD / BALL).
+const NET_PHYS = {
+  speed: 5.95,
+  accel: 21,
+  friction: 27,
+  xMin: -4.55,
+  xMax: 4.55,
+  p1YMin: 1.15,
+  p1YMax: 11.55,
+  p2YMin: -11.55,
+  p2YMax: -1.15,
+  gravity: 22,
+  bounce: 0.68,
+  floorDrag: 0.7,
+};
+
+const NET_SIM = {
+  snapshots: [], // [{at, players, ball}] newest last
+  inputSeq: 0,
+  recentInputs: [], // [{seq, input}] for redundancy
+  lastSentKey: "",
+  predHistory: [], // [{t, x, y}] local predicted positions for reconciliation
+  corrX: 0,
+  corrY: 0,
+  lastAck: 0,
+};
+
+function netReset() {
+  NET_SIM.snapshots.length = 0;
+  NET_SIM.recentInputs.length = 0;
+  NET_SIM.lastSentKey = "";
+  NET_SIM.predHistory.length = 0;
+  NET_SIM.corrX = 0;
+  NET_SIM.corrY = 0;
+  NET_SIM.lastAck = 0;
+}
+
 let netDebug = null;
 
 const THEMES = [
@@ -488,6 +537,7 @@ function handleOnlineMessage(raw) {
     ONLINE.playerId = packet.playerId;
     ONLINE.role = packet.role;
     ONLINE.status = "connected";
+    netReset();
     syncOnlineUrl();
     return;
   }
@@ -547,12 +597,36 @@ function onlineInputPayload() {
   };
 }
 
+function inputPayloadKey(payload) {
+  return [
+    payload.left, payload.right, payload.up, payload.down,
+    payload.hit, payload.special, payload.shotUp, payload.shotDown,
+    Math.round((payload.aim || 0) * 20),
+  ].join(",");
+}
+
 function sendOnlineInput() {
   const now = performance.now();
-  if (now - ONLINE.lastInputSent < 38) return;
-  ONLINE.lastInputSent = now;
-  if (sendOnline({ type: "input", input: onlineInputPayload() })) {
+  const payload = onlineInputPayload();
+  const key = inputPayloadKey(payload);
+  // Send immediately on any input change; otherwise throttle to a keepalive.
+  const changed = key !== NET_SIM.lastSentKey;
+  if (!changed && now - ONLINE.lastInputSent < NET_TUNE.inputResendMs) return;
+  NET_SIM.inputSeq += 1;
+  const sent = sendOnline({
+    type: "input",
+    seq: NET_SIM.inputSeq,
+    input: payload,
+    prev: NET_SIM.recentInputs.slice(-NET_TUNE.redundantInputs),
+  });
+  if (sent) {
+    ONLINE.lastInputSent = now;
     ONLINE.lastInputAt = now;
+    NET_SIM.lastSentKey = key;
+    NET_SIM.recentInputs.push({ seq: NET_SIM.inputSeq, input: payload });
+    if (NET_SIM.recentInputs.length > 6) NET_SIM.recentInputs.shift();
+  } else {
+    NET_SIM.inputSeq -= 1;
   }
 }
 
@@ -571,6 +645,9 @@ function updateOnline(dt) {
   sendOnlineInput();
   updateActorCooldowns(player, dt);
   updateActorCooldowns(ai, dt);
+  netPredictLocal(dt);
+  netSampleRemote();
+  netSampleBall();
   const now = performance.now();
   sendOnlinePing(now);
   if ((ONLINE.status === "disconnected" || ONLINE.status === "error") && now > ONLINE.reconnectAt) {
@@ -599,28 +676,33 @@ function applyOnlineState(packet) {
   state.aiGames = score.aiGames ?? 0;
 
   const players = packet.players || {};
-  applyOnlineActor(player, players.p1, 9.9);
-  applyOnlineActor(ai, players.p2, -9.9);
+  NET_SIM.snapshots.push({
+    at: ONLINE.snapshotAt,
+    players,
+    ball: packet.ball || null,
+  });
+  if (NET_SIM.snapshots.length > 16) NET_SIM.snapshots.shift();
+  if (packet.ack && ONLINE.playerId && packet.ack[ONLINE.playerId] != null) {
+    NET_SIM.lastAck = Number(packet.ack[ONLINE.playerId]) || 0;
+  }
+
+  const isPlaying = ONLINE.role === "player" && (ONLINE.playerId === "p1" || ONLINE.playerId === "p2");
+  if (isPlaying) {
+    // Remote actor: snapped here, then interpolated each frame in netSampleRemote.
+    const localId = ONLINE.playerId;
+    const remoteId = localId === "p1" ? "p2" : "p1";
+    const remoteActor = remoteId === "p1" ? player : ai;
+    const localActor = localId === "p1" ? player : ai;
+    applyOnlineActor(remoteActor, players[remoteId], remoteId === "p1" ? 9.9 : -9.9);
+    // Local actor: position is predicted locally; only reconcile against server.
+    netReconcile(localActor, players[localId], localId);
+  } else {
+    applyOnlineActor(player, players.p1, 9.9);
+    applyOnlineActor(ai, players.p2, -9.9);
+  }
   const local = players[ONLINE.playerId] || players.p1;
   state.energy = local?.energy ?? 0;
-
-  if (packet.ball) {
-    ball.x = packet.ball.x ?? 0;
-    ball.y = packet.ball.y ?? 0;
-    ball.z = packet.ball.z ?? 0;
-    ball.vx = packet.ball.vx ?? 0;
-    ball.vy = packet.ball.vy ?? 0;
-    ball.vz = packet.ball.vz ?? 0;
-    ball.bounceCount = packet.ball.bounceCount ?? 0;
-    ball.inPlay = !!packet.ball.inPlay;
-    ball.lastY = packet.ball.lastY ?? ball.y;
-    if (ball.inPlay) {
-      ball.trail.unshift({ x: ball.x, y: ball.y, z: ball.z });
-      if (ball.trail.length > 9) ball.trail.pop();
-    } else {
-      ball.trail.length = 0;
-    }
-  }
+  // Ball state is applied per-frame in netSampleBall (dead reckoning).
 
   if (packet.result) {
     const localIsP2 = ONLINE.playerId === "p2";
@@ -653,6 +735,199 @@ function applyOnlineActor(actor, data, fallbackY) {
   actor.vx = Number(data.vx) || 0;
   actor.vy = Number(data.vy) || 0;
   actor.cooldown = Number(data.cooldown) || 0;
+}
+
+function netClampY(y, playerId) {
+  return playerId === "p1"
+    ? clamp(y, NET_PHYS.p1YMin, NET_PHYS.p1YMax)
+    : clamp(y, NET_PHYS.p2YMin, NET_PHYS.p2YMax);
+}
+
+// Local player prediction: run the same movement model as the server so the
+// local racket responds on the very next frame instead of after a round trip.
+function netPredictLocal(dt) {
+  if (ONLINE.role !== "player" || (ONLINE.playerId !== "p1" && ONLINE.playerId !== "p2")) return;
+  if (state.phase === "waiting") return; // server is not simulating players yet
+  const localId = ONLINE.playerId;
+  const actor = localId === "p1" ? player : ai;
+  const payload = onlineInputPayload(); // already in server coordinates
+  let ix = (payload.right ? 1 : 0) - (payload.left ? 1 : 0);
+  let iy = (payload.down ? 1 : 0) - (payload.up ? 1 : 0);
+  const mag = Math.hypot(ix, iy);
+  if (mag > 1) {
+    ix /= mag;
+    iy /= mag;
+  }
+  if (ix || iy) {
+    actor.vx += ix * NET_PHYS.accel * dt;
+    actor.vy += iy * NET_PHYS.accel * dt;
+  } else {
+    const v = Math.hypot(actor.vx, actor.vy);
+    if (v > 0) {
+      const nextV = Math.max(0, v - NET_PHYS.friction * dt);
+      actor.vx *= nextV / v;
+      actor.vy *= nextV / v;
+    }
+  }
+  const speed = Math.hypot(actor.vx, actor.vy);
+  if (speed > NET_PHYS.speed) {
+    actor.vx = (actor.vx / speed) * NET_PHYS.speed;
+    actor.vy = (actor.vy / speed) * NET_PHYS.speed;
+  }
+  actor.x = clamp(actor.x + actor.vx * dt, NET_PHYS.xMin, NET_PHYS.xMax);
+  actor.y = netClampY(actor.y + actor.vy * dt, localId);
+
+  // Bleed pending server correction into the predicted position.
+  const k = 1 - Math.exp(-NET_TUNE.correctRate * dt);
+  if (NET_SIM.corrX || NET_SIM.corrY) {
+    actor.x = clamp(actor.x + NET_SIM.corrX * k, NET_PHYS.xMin, NET_PHYS.xMax);
+    actor.y = netClampY(actor.y + NET_SIM.corrY * k, localId);
+    NET_SIM.corrX *= 1 - k;
+    NET_SIM.corrY *= 1 - k;
+    if (Math.abs(NET_SIM.corrX) < 0.01) NET_SIM.corrX = 0;
+    if (Math.abs(NET_SIM.corrY) < 0.01) NET_SIM.corrY = 0;
+  }
+
+  const now = performance.now();
+  NET_SIM.predHistory.push({ t: now, x: actor.x, y: actor.y });
+  while (NET_SIM.predHistory.length && NET_SIM.predHistory[0].t < now - 1200) {
+    NET_SIM.predHistory.shift();
+  }
+}
+
+// Compare the authoritative position against where we predicted ourselves to
+// be roughly when the server sampled it, then queue a smooth correction.
+function netReconcile(actor, data, localId) {
+  if (!data) return;
+  const sx = Number(data.x) || 0;
+  const sy = Number(data.y) || 0;
+  actor.cooldown = Number(data.cooldown) || 0;
+  const history = NET_SIM.predHistory;
+  if (!history.length) {
+    actor.x = sx;
+    actor.y = sy;
+    actor.vx = Number(data.vx) || 0;
+    actor.vy = Number(data.vy) || 0;
+    return;
+  }
+  const lagMs = clamp(((ONLINE.rttMs ?? 140) / 2) + 10, 20, 280);
+  const target = ONLINE.snapshotAt - lagMs;
+  let past = history[0];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i].t <= target) {
+      past = history[i];
+      break;
+    }
+  }
+  const ex = sx - past.x;
+  const ey = sy - past.y;
+  if (Math.hypot(ex, ey) > NET_TUNE.snapDist) {
+    actor.x = sx;
+    actor.y = sy;
+    actor.vx = Number(data.vx) || 0;
+    actor.vy = Number(data.vy) || 0;
+    NET_SIM.corrX = 0;
+    NET_SIM.corrY = 0;
+    NET_SIM.predHistory.length = 0;
+  } else {
+    NET_SIM.corrX = ex;
+    NET_SIM.corrY = ey;
+  }
+}
+
+// Remote player: render ~interpDelayMs in the past, lerping between the two
+// snapshots that bracket the render time. Falls back to short extrapolation.
+function netSampleRemote() {
+  if (ONLINE.playerId !== "p1" && ONLINE.playerId !== "p2") return;
+  const snaps = NET_SIM.snapshots;
+  if (!snaps.length) return;
+  const remoteId = ONLINE.playerId === "p1" ? "p2" : "p1";
+  const actor = remoteId === "p1" ? player : ai;
+  const renderT = performance.now() - NET_TUNE.interpDelayMs;
+  let older = null;
+  let newer = null;
+  for (let i = snaps.length - 1; i >= 0; i -= 1) {
+    if (snaps[i].at <= renderT) {
+      older = snaps[i];
+      newer = snaps[i + 1] || null;
+      break;
+    }
+  }
+  if (!older) {
+    older = snaps[0];
+    newer = null;
+  }
+  const a = older.players?.[remoteId];
+  if (!a) return;
+  if (newer && newer.players?.[remoteId]) {
+    const b = newer.players[remoteId];
+    const span = Math.max(1, newer.at - older.at);
+    const t = clamp((renderT - older.at) / span, 0, 1);
+    actor.x = lerp(Number(a.x) || 0, Number(b.x) || 0, t);
+    actor.y = lerp(Number(a.y) || 0, Number(b.y) || 0, t);
+    actor.vx = Number(b.vx) || 0;
+    actor.vy = Number(b.vy) || 0;
+  } else {
+    const aheadS = clamp(renderT - older.at, 0, NET_TUNE.maxExtrapolateMs) / 1000;
+    actor.x = clamp((Number(a.x) || 0) + (Number(a.vx) || 0) * aheadS, NET_PHYS.xMin, NET_PHYS.xMax);
+    actor.y = netClampY((Number(a.y) || 0) + (Number(a.vy) || 0) * aheadS, remoteId);
+    actor.vx = Number(a.vx) || 0;
+    actor.vy = Number(a.vy) || 0;
+  }
+}
+
+// Ball: dead-reckon forward from the newest snapshot using the same physics
+// as the server, compensating snapshot age (~RTT/2 + broadcast gap).
+function netSampleBall() {
+  const snaps = NET_SIM.snapshots;
+  if (!snaps.length) return;
+  const latest = snaps[snaps.length - 1];
+  const src = latest.ball;
+  if (!src) return;
+  ball.inPlay = !!src.inPlay;
+  ball.bounceCount = src.bounceCount ?? 0;
+  if (!ball.inPlay) {
+    ball.x = Number(src.x) || 0;
+    ball.y = Number(src.y) || 0;
+    ball.z = Number(src.z) || 0;
+    ball.vx = 0;
+    ball.vy = 0;
+    ball.vz = 0;
+    ball.lastY = ball.y;
+    ball.trail.length = 0;
+    return;
+  }
+  let x = Number(src.x) || 0;
+  let y = Number(src.y) || 0;
+  let z = Number(src.z) || 0;
+  let vx = Number(src.vx) || 0;
+  let vy = Number(src.vy) || 0;
+  let vz = Number(src.vz) || 0;
+  let ageS = clamp(performance.now() - latest.at, 0, NET_TUNE.maxExtrapolateMs) / 1000;
+  const step = 1 / 120;
+  while (ageS > 0) {
+    const dt = Math.min(step, ageS);
+    ageS -= dt;
+    vz -= NET_PHYS.gravity * dt;
+    x += vx * dt;
+    y += vy * dt;
+    z += vz * dt;
+    if (z <= 0) {
+      z = 0;
+      vz = Math.max(2.1, -vz * NET_PHYS.bounce);
+      vx *= NET_PHYS.floorDrag;
+      vy *= NET_PHYS.floorDrag;
+    }
+  }
+  ball.lastY = ball.y;
+  ball.x = x;
+  ball.y = y;
+  ball.z = z;
+  ball.vx = vx;
+  ball.vy = vy;
+  ball.vz = vz;
+  ball.trail.unshift({ x, y, z });
+  if (ball.trail.length > 18) ball.trail.pop();
 }
 
 function controlLayout() {

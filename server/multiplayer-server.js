@@ -107,6 +107,7 @@ function emptyInput() {
     hitUntil: 0,
     specialUntil: 0,
     inputAt: 0,
+    seq: 0,
   };
 }
 
@@ -322,6 +323,7 @@ function serve(room) {
     ? { x: rand(-2.7, 2.7), y: rand(-7.6, -5.1) }
     : { x: rand(-2.7, 2.7), y: rand(5.1, 7.6) };
   launchBallTo(room, target.x, target.y, SHOTS.serve, 1);
+  broadcastNow(room);
 }
 
 function updateRoom(room, dt, now) {
@@ -494,6 +496,7 @@ function tryControlledHit(room, playerId, side, now) {
   } else {
     actor.energy = clamp(actor.energy + shot.energy + (quality === "perfect" ? 8 : quality === "good" ? 3 : 0), 0, 100);
   }
+  broadcastNow(room);
 }
 
 function canHit(room, actor, playerId, side) {
@@ -692,6 +695,7 @@ function endPoint(room, winner, reason) {
   if (winner === "p1") room.playerPoints += 1;
   else room.aiPoints += 1;
   applyGameScore(room, winner);
+  broadcastNow(room);
 }
 
 function applyGameScore(room) {
@@ -751,6 +755,10 @@ function snapshotRoom(room) {
     maxRally: room.maxRally,
     themeIndex: room.themeIndex,
     result: room.result,
+    ack: {
+      p1: room.inputs.p1.seq || 0,
+      p2: room.inputs.p2.seq || 0,
+    },
     serverTime: now,
     updatedAt: now,
   };
@@ -774,6 +782,13 @@ function broadcastRoom(room) {
   for (const client of room.clients.values()) {
     sendJson(client, state);
   }
+}
+
+// Broadcast immediately (key events: hit, serve, point end) instead of
+// waiting for the next BROADCAST_MS slot.
+function broadcastNow(room) {
+  room.lastBroadcast = Date.now();
+  broadcastRoom(room);
 }
 
 function handleMessage(client, raw) {
@@ -818,22 +833,46 @@ function handleMessage(client, raw) {
     const tempInput = { ...previous, rttMs };
     room.inputs[client.playerId] = tempInput;
     const compensation = onlineHitCompensation(room, client.playerId);
-    const hit = !!next.hit;
-    const special = !!next.special;
+
+    // Entries: redundant recent inputs (message.prev) plus the current one, ordered by seq.
+    const entries = [];
+    if (Array.isArray(message.prev)) {
+      for (const item of message.prev.slice(-4)) {
+        if (!item || typeof item !== "object") continue;
+        entries.push({ seq: Number(item.seq) || 0, input: item.input || {} });
+      }
+    }
+    entries.push({ seq: Number(message.seq) || 0, input: next });
+    entries.sort((a, b) => a.seq - b.seq);
+
+    const lastSeq = previous.seq || 0;
+    // seq === 0 means a client without sequence support; always accept those.
+    const fresh = entries.filter((entry) => entry.seq === 0 || entry.seq > lastSeq);
+    if (!fresh.length) return; // stale or reordered packet; keep current input state
+
+    let hitUntil = previous.hitUntil || 0;
+    let specialUntil = previous.specialUntil || 0;
+    for (const entry of fresh) {
+      if (entry.input.hit) hitUntil = Math.max(hitUntil, now + compensation.hitGraceMs);
+      if (entry.input.special) specialUntil = Math.max(specialUntil, now + compensation.hitGraceMs);
+    }
+    const newest = fresh[fresh.length - 1];
+    const latest = newest.input;
     room.inputs[client.playerId] = {
-      left: !!next.left,
-      right: !!next.right,
-      up: !!next.up,
-      down: !!next.down,
-      hit,
-      special,
-      aim: clamp(Number(next.aim) || 0, -1, 1),
-      shotUp: !!next.shotUp,
-      shotDown: !!next.shotDown,
+      left: !!latest.left,
+      right: !!latest.right,
+      up: !!latest.up,
+      down: !!latest.down,
+      hit: !!latest.hit,
+      special: !!latest.special,
+      aim: clamp(Number(latest.aim) || 0, -1, 1),
+      shotUp: !!latest.shotUp,
+      shotDown: !!latest.shotDown,
       rttMs,
-      hitUntil: hit ? Math.max(previous.hitUntil || 0, now + compensation.hitGraceMs) : previous.hitUntil || 0,
-      specialUntil: special ? Math.max(previous.specialUntil || 0, now + compensation.hitGraceMs) : previous.specialUntil || 0,
+      hitUntil,
+      specialUntil,
       inputAt: now,
+      seq: Math.max(lastSeq, newest.seq),
     };
   } else if (message.type === "action") {
     if (message.action === "replay" || message.action === "continue") {
@@ -1023,10 +1062,23 @@ server.on("upgrade", (request, socket) => {
   });
 });
 
+// Fixed-timestep simulation driven by real elapsed time. On constrained
+// hosts (e.g. Render free tier) setInterval can fire late; without this the
+// simulation would run slower than real time and feel sluggish for everyone.
+let lastTickAt = Date.now();
+let tickDebtMs = 0;
 setInterval(() => {
   const now = Date.now();
-  for (const room of rooms.values()) {
-    updateRoom(room, TICK_MS / 1000, now);
+  tickDebtMs += now - lastTickAt;
+  lastTickAt = now;
+  // Cap catch-up work to avoid a death spiral after a long stall.
+  if (tickDebtMs > 250) tickDebtMs = 250;
+  while (tickDebtMs >= TICK_MS) {
+    tickDebtMs -= TICK_MS;
+    const stepNow = now - tickDebtMs;
+    for (const room of rooms.values()) {
+      updateRoom(room, TICK_MS / 1000, stepNow);
+    }
   }
 }, TICK_MS);
 
