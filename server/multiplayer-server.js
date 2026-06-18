@@ -13,6 +13,8 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TICK_MS = 1000 / 60;
 const BROADCAST_MS = 1000 / 24;
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS || 30000);
+// Number of selectable court themes. MUST stay in sync with THEMES.length in game.js.
+const THEME_COUNT = 3;
 
 const WORLD = {
   xMin: -5.2,
@@ -880,7 +882,7 @@ function handleMessage(client, raw) {
       broadcastRoom(room);
     }
   } else if (message.type === "theme") {
-    room.themeIndex = clamp(Number(message.index) || 0, 0, 2);
+    room.themeIndex = clamp(Number(message.index) || 0, 0, THEME_COUNT - 1);
     broadcastRoom(room);
   }
 }
