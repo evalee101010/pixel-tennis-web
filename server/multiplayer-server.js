@@ -13,6 +13,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TICK_MS = 1000 / 60;
 const BROADCAST_MS = 1000 / 24;
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS || 30000);
+// Number of selectable court themes. MUST stay in sync with THEMES.length in game.js.
 const THEME_COUNT = 4;
 
 const WORLD = {

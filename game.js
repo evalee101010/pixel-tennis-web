@@ -463,11 +463,7 @@ const ball = {
 
 let noiseTiles = null;
 const UI_ASSET_VERSION = "ui-normalized-1";
-const themeImages = THEMES.map((theme) => {
-  const image = new Image();
-  image.src = theme.src;
-  return image;
-});
+const themeImages = THEMES.map((theme) => loadImage(theme.src));
 const characterSprites = Object.fromEntries(
   CHARACTERS.filter((character) => character.sprite).map((character) => [character.id, loadImage(character.sprite)]),
 );
@@ -527,6 +523,10 @@ function makeActor(x, y, side) {
 
 function loadImage(src) {
   const image = new Image();
+  image.onerror = () => {
+    // Surfaces a missing/un-committed asset loudly instead of silently degrading.
+    console.warn(`[assets] Failed to load "${src}". Check the file exists and was committed (git add).`);
+  };
   image.src = src;
   return image;
 }
