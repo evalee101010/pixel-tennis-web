@@ -13,6 +13,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const TICK_MS = 1000 / 60;
 const BROADCAST_MS = 1000 / 24;
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS || 30000);
+const THEME_COUNT = 4;
 
 const WORLD = {
   xMin: -5.2,
@@ -122,6 +123,7 @@ function makePlayer(id) {
     cooldown: 0,
     energy: 0,
     connected: false,
+    characterId: isP1 ? "tanjiro" : "zenitsu",
   };
 }
 
@@ -202,7 +204,12 @@ function assignPlayer(room, client) {
   return `spectator-${client.id.slice(0, 4)}`;
 }
 
-function joinRoom(client, requestedRoom) {
+function normalizeCharacterId(input, fallback = "tanjiro") {
+  const text = String(input || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+  return text || fallback;
+}
+
+function joinRoom(client, requestedRoom, characterId) {
   if (client.room) leaveRoom(client);
   const id = normalizeRoom(requestedRoom) || roomCode();
   const room = rooms.get(id) || makeRoom(id);
@@ -212,6 +219,7 @@ function joinRoom(client, requestedRoom) {
   room.clients.set(playerId, client);
   if (playerId === "p1" || playerId === "p2") {
     room.players[playerId].connected = true;
+    room.players[playerId].characterId = normalizeCharacterId(characterId, playerId === "p1" ? "tanjiro" : "zenitsu");
   }
   sendJson(client, {
     type: "welcome",
@@ -260,8 +268,14 @@ function syncRoomReadiness(room) {
 
 function resetMatch(room, keepTheme = true) {
   const themeIndex = room.themeIndex;
+  const characterIds = {
+    p1: room.players.p1.characterId,
+    p2: room.players.p2.characterId,
+  };
   room.players.p1 = makePlayer("p1");
   room.players.p2 = makePlayer("p2");
+  room.players.p1.characterId = characterIds.p1 || room.players.p1.characterId;
+  room.players.p2.characterId = characterIds.p2 || room.players.p2.characterId;
   room.players.p1.connected = room.clients.has("p1");
   room.players.p2.connected = room.clients.has("p2");
   room.inputs.p1 = emptyInput();
@@ -774,6 +788,7 @@ function publicPlayer(player) {
     cooldown: player.cooldown,
     energy: player.energy,
     connected: player.connected,
+    characterId: player.characterId,
   };
 }
 
@@ -809,7 +824,7 @@ function handleMessage(client, raw) {
   }
   if (message.type === "join") {
     client.debugNet = !!message.debug;
-    joinRoom(client, message.room);
+    joinRoom(client, message.room, message.characterId);
     return;
   }
   const room = client.room;
@@ -880,7 +895,10 @@ function handleMessage(client, raw) {
       broadcastRoom(room);
     }
   } else if (message.type === "theme") {
-    room.themeIndex = clamp(Number(message.index) || 0, 0, 2);
+    room.themeIndex = clamp(Number(message.index) || 0, 0, THEME_COUNT - 1);
+    broadcastRoom(room);
+  } else if (message.type === "character") {
+    room.players[client.playerId].characterId = normalizeCharacterId(message.characterId, room.players[client.playerId].characterId);
     broadcastRoom(room);
   }
 }

@@ -72,6 +72,9 @@ const URL_PARAMS = new URLSearchParams(window.location.search);
 const ONLINE_MODE = URL_PARAMS.get("mode") === "online";
 const DEBUG_NET = URL_PARAMS.get("debug") === "net";
 const ONLINE_PING_MS = 1200;
+const ONLINE_PRODUCTION_ORIGIN = "https://pixel-tennis-web.onrender.com";
+const DIRECT_GAME_START = ONLINE_MODE || URL_PARAMS.has("previewResult");
+const SHOW_PROTOTYPE_BADGE = URL_PARAMS.get("badge") === "prototype";
 const COURT = {
   cx: W / 2,
   top: IS_PORTRAIT ? 168 : 78,
@@ -150,11 +153,24 @@ function netReset() {
 
 let netDebug = null;
 
+const APP_FLOW = {
+  screen: DIRECT_GAME_START ? "game" : "menu",
+  selectedMode: ONLINE_MODE ? "twoPlayer" : "onePlayer",
+  menuChoice: 0,
+  twoPlayerChoice: 0,
+  roomCodeInput: "",
+  roomCodeMode: "join",
+  pauseMenuOpen: false,
+  suppressNextClick: false,
+};
+
 const THEMES = [
   {
     id: "infiniteCastle",
+    uiId: "infiniteCastle",
     button: "castle",
     src: "assets/backgrounds/infinite-castle.png",
+    thumbnail: { x: 0.23, y: 0.28, zoom: 0.56 },
     swatch: ["#10272f", "#d28938", "#294348"],
     court: {
       outer: "rgba(28, 70, 72, 0.2)",
@@ -166,31 +182,60 @@ const THEMES = [
     },
   },
   {
-    id: "islandResort",
-    button: "island",
-    src: "assets/backgrounds/island-resort.png",
-    swatch: ["#26c7d5", "#f3c875", "#246f52"],
+    id: "wisteriaMountain",
+    uiId: "wisteriaMountain",
+    button: "wisteria",
+    src: "assets/backgrounds/wisteria-mountain-v2.png",
+    thumbnail: { x: 0.5, y: 0.18, zoom: 0.58 },
+    ui: {
+      netPreserveAspect: true,
+    },
+    swatch: ["#2a2c78", "#9b65dd", "#f3d47b"],
     court: {
-      outer: "rgba(244, 202, 126, 0.18)",
-      base: "rgba(236, 178, 104, 0.42)",
-      inner: "rgba(49, 180, 188, 0.42)",
-      lane: "rgba(73, 207, 205, 0.24)",
-      line: "#fff6d7",
-      net: "#e9f7ff",
+      outer: "rgba(62, 56, 128, 0.2)",
+      base: "rgba(84, 75, 148, 0.5)",
+      inner: "rgba(112, 89, 168, 0.42)",
+      lane: "rgba(160, 111, 212, 0.24)",
+      line: "#f1eaff",
+      net: "#d6bcff",
     },
   },
   {
-    id: "egyptPyramid",
-    button: "pyramid",
-    src: "assets/backgrounds/egypt-pyramid.png",
-    swatch: ["#d99b38", "#244e8f", "#f6d17c"],
+    id: "midnightTrain",
+    uiId: "midnightTrain",
+    button: "train",
+    src: "assets/backgrounds/midnight-train-v2.png",
+    thumbnail: { x: 0.22, y: 0.28, zoom: 0.6 },
+    ui: {
+      netPreserveAspect: true,
+    },
+    swatch: ["#0d1f42", "#d99438", "#b4232d"],
     court: {
-      outer: "rgba(197, 135, 52, 0.2)",
-      base: "rgba(192, 132, 58, 0.46)",
-      inner: "rgba(219, 159, 74, 0.42)",
-      lane: "rgba(230, 177, 86, 0.24)",
-      line: "#fff0bc",
-      net: "#9fe7ff",
+      outer: "rgba(18, 31, 58, 0.22)",
+      base: "rgba(49, 61, 78, 0.48)",
+      inner: "rgba(70, 78, 92, 0.42)",
+      lane: "rgba(165, 116, 58, 0.18)",
+      line: "#f4e6c7",
+      net: "#f0b36e",
+    },
+  },
+  {
+    id: "lanternDistrict",
+    uiId: "lanternDistrict",
+    button: "district",
+    src: "assets/backgrounds/lantern-district-v2.png",
+    thumbnail: { x: 0.5, y: 0.2, zoom: 0.58 },
+    ui: {
+      netPreserveAspect: true,
+    },
+    swatch: ["#5d1732", "#f0a33b", "#24184f"],
+    court: {
+      outer: "rgba(91, 22, 51, 0.22)",
+      base: "rgba(106, 66, 68, 0.48)",
+      inner: "rgba(126, 76, 78, 0.42)",
+      lane: "rgba(236, 126, 56, 0.2)",
+      line: "#ffe6bd",
+      net: "#ff9f76",
     },
   },
 ];
@@ -224,6 +269,136 @@ const CHARACTER_SKINS = {
     racket: "#e0a02d",
     grip: "#9b49d7",
   },
+};
+
+const CHARACTER_SLOT_COUNT = 24;
+const CHARACTER_PAGE_SIZE = 8;
+const BASE_CHARACTERS = [
+  {
+    id: "tanjiro",
+    name: "TANJIRO",
+    role: "BALANCED",
+    unlocked: true,
+    sprite: "assets/characters/player-chibi-small.png",
+    portrait: "assets/characters/player-chibi.png",
+  },
+  {
+    id: "zenitsu",
+    name: "ZENITSU",
+    role: "POWER",
+    unlocked: true,
+    sprite: "assets/characters/rival-chibi-small.png",
+    portrait: "assets/characters/rival-chibi.png",
+  },
+  {
+    id: "shinobu",
+    name: "SHINOBU",
+    role: "SPEED",
+    unlocked: true,
+    sprite: "assets/characters/shinobu-tennis-small.png",
+    portrait: "assets/characters/shinobu-tennis.png",
+  },
+  {
+    id: "nezuko",
+    name: "NEZUKO",
+    role: "BALANCED",
+    unlocked: true,
+    sprite: "assets/characters/bamboo-rose-tennis-small.png",
+    portrait: "assets/characters/bamboo-rose-tennis.png",
+  },
+  {
+    id: "mitsuri",
+    name: "MITSURI",
+    role: "POWER",
+    unlocked: true,
+    sprite: "assets/characters/sakura-power-tennis-small.png",
+    portrait: "assets/characters/sakura-power-tennis.png",
+  },
+  {
+    id: "inosuke",
+    name: "INOSUKE",
+    role: "ATTACK",
+    unlocked: true,
+    sprite: "assets/characters/wild-mountain-tennis-small.png",
+    portrait: "assets/characters/wild-mountain-tennis.png",
+  },
+  {
+    id: "kyojuro",
+    name: "KYOJURO",
+    role: "POWER",
+    unlocked: true,
+    sprite: "assets/characters/flame-captain-tennis-small.png",
+    portrait: "assets/characters/flame-captain-tennis.png",
+  },
+  {
+    id: "giyu",
+    name: "GIYU",
+    role: "CONTROL",
+    unlocked: true,
+    sprite: "assets/characters/water-mist-tennis-small.png",
+    portrait: "assets/characters/water-mist-tennis.png",
+  },
+  {
+    id: "muzan",
+    name: "MUZAN",
+    role: "BOSS",
+    unlocked: true,
+    sprite: "assets/characters/muzan-tennis-small.png",
+    portrait: "assets/characters/muzan-tennis.png",
+  },
+  {
+    id: "akaza",
+    name: "AKAZA",
+    role: "ATTACK",
+    unlocked: true,
+    sprite: "assets/characters/akaza-tennis-small.png",
+    portrait: "assets/characters/akaza-tennis.png",
+  },
+  {
+    id: "doma",
+    name: "DOMA",
+    role: "TRICK",
+    unlocked: true,
+    sprite: "assets/characters/doma-tennis-small.png",
+    portrait: "assets/characters/doma-tennis.png",
+  },
+  {
+    id: "kokushibo",
+    name: "KOKUSHIBO",
+    role: "MOON",
+    unlocked: true,
+    sprite: "assets/characters/kokushibo-tennis-small.png",
+    portrait: "assets/characters/kokushibo-tennis.png",
+  },
+];
+
+const CHARACTERS = [
+  ...BASE_CHARACTERS,
+  ...Array.from({ length: Math.max(0, CHARACTER_SLOT_COUNT - BASE_CHARACTERS.length) }, (_, index) => {
+    const slotNumber = BASE_CHARACTERS.length + index + 1;
+    const slotLabel = String(slotNumber).padStart(2, "0");
+    return {
+      id: `slot${slotLabel}`,
+      name: "COMING SOON",
+      role: "EMPTY",
+      unlocked: false,
+      sprite: "",
+      portrait: "",
+    };
+  }),
+];
+
+const INITIAL_CHARACTER_INDEX = Math.max(
+  0,
+  CHARACTERS.findIndex((character) => character.unlocked && character.id === URL_PARAMS.get("character")),
+);
+
+const CHARACTER_SELECT = {
+  selectedIndex: INITIAL_CHARACTER_INDEX,
+  panelOpen: false,
+  panelChoice: INITIAL_CHARACTER_INDEX,
+  hoverIndex: -1,
+  page: Math.floor(INITIAL_CHARACTER_INDEX / CHARACTER_PAGE_SIZE),
 };
 
 const state = {
@@ -262,6 +437,7 @@ const input = {
   hitQueued: false,
   hitQueueTimer: 0,
   hitPulse: 0,
+  specialPulse: 0,
   queuedSpecial: false,
   aim: 0,
   pointerId: null,
@@ -286,29 +462,46 @@ const ball = {
 };
 
 let noiseTiles = null;
-const UI_ASSET_VERSION = "ui-slices-3";
+const UI_ASSET_VERSION = "ui-normalized-1";
 const themeImages = THEMES.map((theme) => {
   const image = new Image();
   image.src = theme.src;
   return image;
 });
+const characterSprites = Object.fromEntries(
+  CHARACTERS.filter((character) => character.sprite).map((character) => [character.id, loadImage(character.sprite)]),
+);
+const characterPortraits = Object.fromEntries(
+  CHARACTERS.filter((character) => character.portrait).map((character) => [character.id, loadImage(character.portrait)]),
+);
 const actorSprites = {
-  player: loadImage("assets/characters/player-chibi-small.png"),
-  ai: loadImage("assets/characters/rival-chibi-small.png"),
+  player: characterSprites.tanjiro,
+  ai: characterSprites.zenitsu,
 };
 const equipmentSprites = {
   racket: loadImage("assets/equipment/pixel-racket.svg"),
 };
+const uiSpriteIds = [...new Set(THEMES.map((theme) => theme.uiId || theme.id))];
 const uiSprites = Object.fromEntries(
-  THEMES.map((theme) => [
-    theme.id,
+  uiSpriteIds.map((id) => [
+    id,
     {
-      net: loadImage(`assets/ui/${theme.id}/net.png?v=${UI_ASSET_VERSION}`),
-      joystick: loadImage(`assets/ui/${theme.id}/joystick.png?v=${UI_ASSET_VERSION}`),
-      special: loadImage(`assets/ui/${theme.id}/special.png?v=${UI_ASSET_VERSION}`),
-      hit: loadImage(`assets/ui/${theme.id}/hit.png?v=${UI_ASSET_VERSION}`),
+      net: loadImage(`assets/ui/${id}/net.png?v=${UI_ASSET_VERSION}`),
+      joystick: loadImage(`assets/ui/${id}/joystick-game.png?v=${UI_ASSET_VERSION}`),
+      special: loadImage(`assets/ui/${id}/special-game.png?v=${UI_ASSET_VERSION}`),
+      hit: loadImage(`assets/ui/${id}/hit-game.png?v=${UI_ASSET_VERSION}`),
     },
   ]),
+);
+const MENU_ASSET_PATHS = {
+  background: "assets/menu/player-select-bg-kimetsu-v2.png",
+  logo: "assets/menu/logo-pixel-tennis.png",
+  onePlayer: "",
+  twoPlayer: "",
+};
+const MENU_BUTTON_TEXT_OVERLAY = true;
+const menuSprites = Object.fromEntries(
+  Object.entries(MENU_ASSET_PATHS).map(([key, src]) => [key, src ? loadImage(src) : null]),
 );
 let accumulator = 0;
 let lastTime = performance.now();
@@ -328,6 +521,7 @@ function makeActor(x, y, side) {
     predicted: { x, y },
     pose: 0,
     skin: side === "player" ? "taishoSwordsman" : "lightningRival",
+    characterId: side === "player" ? "tanjiro" : "zenitsu",
   };
 }
 
@@ -365,6 +559,122 @@ function keyCode(key) {
 
 function currentTheme() {
   return THEMES[state.themeIndex] || THEMES[0];
+}
+
+function uiControlScale(theme, control) {
+  const ui = theme.ui || {};
+  return (ui.buttonScale || 1) * (ui[`${control}Scale`] || 1);
+}
+
+function uiControlOffset(theme, control) {
+  const ui = theme.ui || {};
+  return {
+    x: ui[`${control}OffsetX`] || 0,
+    y: ui[`${control}OffsetY`] || 0,
+  };
+}
+
+function unlockedCharacters() {
+  return CHARACTERS.filter((character) => character.unlocked);
+}
+
+function characterById(id) {
+  return CHARACTERS.find((character) => character.id === id) || unlockedCharacters()[0] || CHARACTERS[0];
+}
+
+function characterIndexById(id) {
+  const index = CHARACTERS.findIndex((character) => character.id === id);
+  return index >= 0 ? index : 0;
+}
+
+function characterPageCount() {
+  return Math.ceil(CHARACTERS.length / CHARACTER_PAGE_SIZE);
+}
+
+function characterPageForIndex(index) {
+  return Math.floor(Math.max(0, index) / CHARACTER_PAGE_SIZE);
+}
+
+function setCharacterPanelPage(page) {
+  const maxPage = Math.max(0, characterPageCount() - 1);
+  const nextPage = Math.max(0, Math.min(maxPage, page));
+  const start = nextPage * CHARACTER_PAGE_SIZE;
+  const end = Math.min(CHARACTERS.length, start + CHARACTER_PAGE_SIZE);
+  CHARACTER_SELECT.page = nextPage;
+  CHARACTER_SELECT.hoverIndex = -1;
+  if (CHARACTER_SELECT.panelChoice < start || CHARACTER_SELECT.panelChoice >= end) {
+    CHARACTER_SELECT.panelChoice =
+      CHARACTER_SELECT.selectedIndex >= start && CHARACTER_SELECT.selectedIndex < end ? CHARACTER_SELECT.selectedIndex : start;
+  }
+}
+
+function openCharacterPanel() {
+  CHARACTER_SELECT.panelOpen = true;
+  CHARACTER_SELECT.panelChoice = CHARACTER_SELECT.selectedIndex;
+  CHARACTER_SELECT.hoverIndex = -1;
+  setCharacterPanelPage(characterPageForIndex(CHARACTER_SELECT.selectedIndex));
+}
+
+function moveCharacterPanelChoice(delta) {
+  const next = Math.max(0, Math.min(CHARACTERS.length - 1, CHARACTER_SELECT.panelChoice + delta));
+  CHARACTER_SELECT.panelChoice = next;
+  CHARACTER_SELECT.hoverIndex = -1;
+  setCharacterPanelPage(characterPageForIndex(next));
+}
+
+function selectedCharacter() {
+  return CHARACTERS[CHARACTER_SELECT.selectedIndex] || unlockedCharacters()[0] || CHARACTERS[0];
+}
+
+function selectedCharacterId() {
+  return selectedCharacter().id;
+}
+
+function setSelectedCharacterIndex(index) {
+  const character = CHARACTERS[index];
+  if (!character || !character.unlocked) return false;
+  CHARACTER_SELECT.selectedIndex = index;
+  CHARACTER_SELECT.panelChoice = index;
+  CHARACTER_SELECT.hoverIndex = -1;
+  CHARACTER_SELECT.page = characterPageForIndex(index);
+  return true;
+}
+
+function cycleSelectedCharacter(direction) {
+  const count = CHARACTERS.length;
+  for (let step = 1; step <= count; step += 1) {
+    const next = (CHARACTER_SELECT.selectedIndex + direction * step + count) % count;
+    if (setSelectedCharacterIndex(next)) return true;
+  }
+  return false;
+}
+
+function chooseOpponentCharacterId(playerCharacterId) {
+  const candidates = unlockedCharacters().filter((character) => character.id !== playerCharacterId);
+  if (!candidates.length) return playerCharacterId;
+  return candidates[(Math.random() * candidates.length) | 0].id;
+}
+
+function spriteForCharacterId(id) {
+  const character = characterById(id);
+  return characterSprites[character.id] || actorSprites.player;
+}
+
+function portraitForCharacterId(id) {
+  const character = characterById(id);
+  return characterPortraits[character.id] || spriteForCharacterId(character.id);
+}
+
+function isMenuOpen() {
+  return APP_FLOW.screen === "menu";
+}
+
+function isShortcutsOpen() {
+  return APP_FLOW.screen === "shortcuts";
+}
+
+function isTwoPlayerSetupOpen() {
+  return APP_FLOW.screen === "twoPlayerSetup";
 }
 
 function isMirroredView() {
@@ -432,7 +742,8 @@ function setTheme(index) {
 }
 
 function onlineServerUrl() {
-  const explicit = URL_PARAMS.get("server");
+  const params = new URLSearchParams(window.location.search);
+  const explicit = params.get("server");
   if (explicit) return normalizeWebSocketUrl(explicit);
   if (location.protocol === "https:") {
     return `wss://${location.host}/ws`;
@@ -501,20 +812,24 @@ function connectOnline() {
     const socket = new WebSocket(ONLINE.serverUrl);
     ONLINE.socket = socket;
     socket.addEventListener("open", () => {
+      if (ONLINE.socket !== socket) return;
       ONLINE.status = "connected";
       ONLINE.message = "";
-      sendOnline({ type: "join", room: ONLINE.room, debug: DEBUG_NET });
+      sendOnline({ type: "join", room: ONLINE.room, debug: DEBUG_NET, characterId: selectedCharacterId() });
       sendOnlinePing(performance.now(), true);
     });
     socket.addEventListener("message", (event) => {
+      if (ONLINE.socket !== socket) return;
       handleOnlineMessage(event.data);
     });
     socket.addEventListener("close", () => {
+      if (ONLINE.socket !== socket) return;
       ONLINE.status = "disconnected";
       ONLINE.message = "DISCONNECTED";
       ONLINE.reconnectAt = performance.now() + 1800;
     });
     socket.addEventListener("error", () => {
+      if (ONLINE.socket !== socket) return;
       ONLINE.status = "error";
       ONLINE.message = "CONNECTION ERROR";
     });
@@ -735,6 +1050,7 @@ function applyOnlineActor(actor, data, fallbackY) {
   actor.vx = Number(data.vx) || 0;
   actor.vy = Number(data.vy) || 0;
   actor.cooldown = Number(data.cooldown) || 0;
+  if (data.characterId) actor.characterId = characterById(data.characterId).id;
 }
 
 function netClampY(y, playerId) {
@@ -932,43 +1248,638 @@ function netSampleBall() {
 
 function controlLayout() {
   if (IS_PORTRAIT) {
+    const actionSize = 42;
+    const actionGap = 12;
+    const actionY = 144;
+    const actionRight = W - 32;
+    const actionX = actionRight - actionSize * 3 - actionGap * 2;
+    const themeX = 32;
+    const controlY = H - 118;
     return {
-      stick: { x: 86, y: H - 128, radius: 58, knob: 34, hot: 82 },
-      special: { x: W - 172, y: H - 112, radius: 44, hot: 60 },
-      racket: { x: W - 82, y: H - 116, radius: 64, hot: 88 },
+      stick: { x: 86, y: controlY, radius: 58, knob: 34, hot: 82 },
+      special: { x: W - 196, y: controlY, radius: 42, hot: 72 },
+      racket: { x: W - 76, y: controlY, radius: 62, hot: 78 },
       energy: { x: W - 38, y: H - 292, width: 24, height: 202 },
       actions: {
-        reset: { x: W - 128, y: 144, width: 42, height: 42 },
-        pause: { x: W - 74, y: 144, width: 42, height: 42 },
+        home: { x: actionX, y: actionY, width: actionSize, height: actionSize },
+        reset: { x: actionX + actionSize + actionGap, y: actionY, width: actionSize, height: actionSize },
+        pause: { x: actionX + (actionSize + actionGap) * 2, y: actionY, width: actionSize, height: actionSize },
       },
       themes: [
-        { x: 34, y: 146, size: 34 },
-        { x: 76, y: 146, size: 34 },
-        { x: 118, y: 146, size: 34 },
+        { x: themeX, y: actionY, size: actionSize },
+        { x: themeX + actionSize + actionGap, y: actionY, size: actionSize },
+        { x: themeX + (actionSize + actionGap) * 2, y: actionY, size: actionSize },
+        { x: themeX + (actionSize + actionGap) * 3, y: actionY, size: actionSize },
       ],
     };
   }
+  const actionSize = 48;
+  const actionGap = 14;
+  const actionY = 116;
+  const actionRight = W - 54;
+  const actionX = actionRight - actionSize * 3 - actionGap * 2;
+  const themeX = 54;
+  const controlY = 612;
   return {
-    stick: { x: 130, y: 612, radius: 66, knob: 38, hot: 92 },
-    special: { x: 694, y: 628, radius: 50, hot: 66 },
-    racket: { x: 808, y: 608, radius: 74, hot: 96 },
+    stick: { x: 130, y: controlY, radius: 66, knob: 38, hot: 92 },
+    special: { x: 660, y: controlY, radius: 48, hot: 78 },
+    racket: { x: 824, y: controlY, radius: 72, hot: 88 },
     energy: { x: 902, y: 498, width: 28, height: 168 },
     actions: {
-      reset: { x: 716, y: 116, width: 48, height: 48 },
-      pause: { x: 782, y: 116, width: 48, height: 48 },
+      home: { x: actionX, y: actionY, width: actionSize, height: actionSize },
+      reset: { x: actionX + actionSize + actionGap, y: actionY, width: actionSize, height: actionSize },
+      pause: { x: actionX + (actionSize + actionGap) * 2, y: actionY, width: actionSize, height: actionSize },
     },
     themes: [
-      { x: 54, y: 126, size: 36 },
-      { x: 98, y: 126, size: 36 },
-      { x: 142, y: 126, size: 36 },
+      { x: themeX, y: actionY, size: actionSize },
+      { x: themeX + actionSize + actionGap, y: actionY, size: actionSize },
+      { x: themeX + (actionSize + actionGap) * 2, y: actionY, size: actionSize },
+      { x: themeX + (actionSize + actionGap) * 3, y: actionY, size: actionSize },
     ],
   };
 }
 
+function modeSelectLayout() {
+  const buttonWidth = IS_PORTRAIT ? Math.min(W - 86, 380) : 420;
+  const buttonHeight = IS_PORTRAIT ? 86 : 74;
+  const x = Math.round((W - buttonWidth) / 2);
+  const y = IS_PORTRAIT ? 548 : 472;
+  const gap = IS_PORTRAIT ? 24 : 18;
+  const shortcutWidth = 128;
+  const shortcutHeight = 30;
+  return {
+    titleY: IS_PORTRAIT ? 122 : 92,
+    characterY: IS_PORTRAIT ? 332 : 286,
+    character: {
+      x: Math.round(W / 2 - 82),
+      y: IS_PORTRAIT ? 226 : 190,
+      width: 164,
+      height: 190,
+    },
+    buttons: [
+      {
+        id: "onePlayer",
+        x,
+        y,
+        width: buttonWidth,
+        height: buttonHeight,
+        label: "ONE PLAYER",
+        subLabel: "SOLO MATCH",
+        assetKey: "onePlayer",
+      },
+      {
+        id: "twoPlayer",
+        x,
+        y: y + buttonHeight + gap,
+        width: buttonWidth,
+        height: buttonHeight,
+        label: "TWO PLAYER",
+        subLabel: "ONLINE ROOM",
+        assetKey: "twoPlayer",
+      },
+    ],
+    shortcuts: {
+      x: Math.round(W / 2 - shortcutWidth / 2),
+      y: y + buttonHeight * 2 + gap + (IS_PORTRAIT ? 34 : 30),
+      width: shortcutWidth,
+      height: shortcutHeight,
+    },
+  };
+}
+
+function shortcutsLayout() {
+  const width = IS_PORTRAIT ? W - 70 : 480;
+  const height = IS_PORTRAIT ? 518 : 432;
+  const x = Math.round((W - width) / 2);
+  const y = IS_PORTRAIT ? 206 : 162;
+  return {
+    box: { x, y, width, height },
+    back: { x: x + 18, y: y + height - 58, width: 112, height: 38 },
+  };
+}
+
+function pauseMenuLayout() {
+  const width = IS_PORTRAIT ? W - 84 : 420;
+  const height = IS_PORTRAIT ? 226 : 210;
+  const x = Math.round((W - width) / 2);
+  const y = IS_PORTRAIT ? 318 : 252;
+  const buttonWidth = IS_PORTRAIT ? 176 : 168;
+  const buttonHeight = 58;
+  const gap = 22;
+  const buttonY = y + height - 86;
+  return {
+    box: { x, y, width, height },
+    continue: {
+      x: Math.round(x + width / 2 - buttonWidth - gap / 2),
+      y: buttonY,
+      width: buttonWidth,
+      height: buttonHeight,
+    },
+    home: {
+      x: Math.round(x + width / 2 + gap / 2),
+      y: buttonY,
+      width: buttonWidth,
+      height: buttonHeight,
+    },
+  };
+}
+
+function characterPanelLayout() {
+  const width = IS_PORTRAIT ? W - 76 : 520;
+  const height = IS_PORTRAIT ? 348 : 318;
+  const x = Math.round((W - width) / 2);
+  const y = IS_PORTRAIT ? 306 : 236;
+  const slotSize = IS_PORTRAIT ? 70 : 62;
+  const gap = IS_PORTRAIT ? 14 : 12;
+  const gridWidth = slotSize * 4 + gap * 3;
+  const startX = Math.round(x + (width - gridWidth) / 2);
+  const startY = y + 86;
+  const page = CHARACTER_SELECT.page;
+  const pageCount = characterPageCount();
+  const pageStart = page * CHARACTER_PAGE_SIZE;
+  const pageCharacters = CHARACTERS.slice(pageStart, pageStart + CHARACTER_PAGE_SIZE);
+  const slots = pageCharacters.map((character, offset) => {
+    const index = pageStart + offset;
+    const col = offset % 4;
+    const row = Math.floor(offset / 4);
+    return {
+      id: character.id,
+      index,
+      x: startX + col * (slotSize + gap),
+      y: startY + row * (slotSize + gap),
+      width: slotSize,
+      height: slotSize,
+    };
+  });
+  return {
+    box: { x, y, width, height },
+    close: { x: x + width - 88, y: y + 18, width: 64, height: 34 },
+    page,
+    pageCount,
+    pageLabel: { x: Math.round(x + width / 2), y: y + 70 },
+    prev: { x: x + 28, y: y + height - 56, width: 56, height: 38, disabled: page <= 0 },
+    next: { x: x + width - 84, y: y + height - 56, width: 56, height: 38, disabled: page >= pageCount - 1 },
+    confirm: { x: Math.round(x + width / 2 - 92), y: y + height - 58, width: 184, height: 42 },
+    slots,
+  };
+}
+
+function twoPlayerSetupLayout() {
+  const panelWidth = IS_PORTRAIT ? W - 72 : 470;
+  const panelX = Math.round((W - panelWidth) / 2);
+  const titleY = IS_PORTRAIT ? 112 : 84;
+  const cardHeight = IS_PORTRAIT ? 74 : 66;
+  const cardGap = IS_PORTRAIT ? 16 : 12;
+  const firstCardY = IS_PORTRAIT ? 318 : 256;
+  const inputY = firstCardY + cardHeight * 2 + cardGap * 2 + 10;
+  const cardWidth = panelWidth - 24;
+  return {
+    titleY,
+    back: { x: panelX + 8, y: IS_PORTRAIT ? 78 : 62, width: 76, height: 38 },
+    cards: [
+      {
+        id: "create",
+        x: panelX + 12,
+        y: firstCardY,
+        width: cardWidth,
+        height: cardHeight,
+        label: "CREATE ROOM",
+        subLabel: "AUTO CODE",
+      },
+      {
+        id: "join",
+        x: panelX + 12,
+        y: firstCardY + cardHeight + cardGap,
+        width: cardWidth,
+        height: cardHeight,
+        label: "JOIN ROOM",
+        subLabel: "FRIEND CODE",
+      },
+    ],
+    input: {
+      x: panelX + 12,
+      y: inputY,
+      width: cardWidth,
+      height: 64,
+    },
+  };
+}
+
+function tryModeSelectClick(p) {
+  const layout = modeSelectLayout();
+  if (pointInRect(p, layout.character)) {
+    openCharacterPanel();
+    return true;
+  }
+  if (pointInRect(p, layout.shortcuts)) {
+    openShortcuts();
+    return true;
+  }
+  for (let i = 0; i < layout.buttons.length; i += 1) {
+    const button = layout.buttons[i];
+    if (pointInRect(p, button)) {
+      APP_FLOW.menuChoice = i;
+      startModeSelection(button.id);
+      return true;
+    }
+  }
+  return false;
+}
+
+function tryShortcutsClick(p) {
+  const layout = shortcutsLayout();
+  if (pointInRect(p, layout.back)) {
+    returnToModeSelect();
+    return true;
+  }
+  return pointInRect(p, layout.box);
+}
+
+function tryCharacterPanelClick(p) {
+  if (!CHARACTER_SELECT.panelOpen) return false;
+  const layout = characterPanelLayout();
+  if (pointInRect(p, layout.close)) {
+    CHARACTER_SELECT.panelOpen = false;
+    return true;
+  }
+  if (pointInRect(p, layout.prev)) {
+    if (!layout.prev.disabled) setCharacterPanelPage(layout.page - 1);
+    return true;
+  }
+  if (pointInRect(p, layout.next)) {
+    if (!layout.next.disabled) setCharacterPanelPage(layout.page + 1);
+    return true;
+  }
+  if (pointInRect(p, layout.confirm)) {
+    if (setSelectedCharacterIndex(CHARACTER_SELECT.panelChoice)) {
+      CHARACTER_SELECT.panelOpen = false;
+    }
+    return true;
+  }
+  for (const slot of layout.slots) {
+    if (pointInRect(p, slot)) {
+      if (CHARACTERS[slot.index]?.unlocked) {
+        CHARACTER_SELECT.panelChoice = slot.index;
+      }
+      return true;
+    }
+  }
+  return pointInRect(p, layout.box);
+}
+
+function tryTwoPlayerSetupClick(p) {
+  const layout = twoPlayerSetupLayout();
+  if (pointInRect(p, layout.back)) {
+    returnToModeSelect();
+    return true;
+  }
+  for (let i = 0; i < layout.cards.length; i += 1) {
+    const card = layout.cards[i];
+    if (pointInRect(p, card)) {
+      APP_FLOW.twoPlayerChoice = i;
+      runTwoPlayerSetupChoice(card.id);
+      return true;
+    }
+  }
+  if (pointInRect(p, layout.input)) {
+    if (APP_FLOW.twoPlayerChoice === 0) APP_FLOW.twoPlayerChoice = 1;
+    APP_FLOW.roomCodeMode = "join";
+    return true;
+  }
+  return false;
+}
+
+function tryPauseMenuClick(p) {
+  if (!APP_FLOW.pauseMenuOpen) return false;
+  const layout = pauseMenuLayout();
+  if (pointInRect(p, layout.continue)) {
+    continueFromPauseMenu();
+    return true;
+  }
+  if (pointInRect(p, layout.home)) {
+    returnToModeSelect();
+    return true;
+  }
+  return pointInRect(p, layout.box);
+}
+
+function tryHomeActionClick(p, controls) {
+  if (pointInRect(p, controls.actions.home)) {
+    returnToModeSelect();
+    return true;
+  }
+  return false;
+}
+
+function updateMenuChoiceFromPointer(p) {
+  const layout = modeSelectLayout();
+  for (let i = 0; i < layout.buttons.length; i += 1) {
+    if (pointInRect(p, layout.buttons[i])) {
+      APP_FLOW.menuChoice = i;
+      return;
+    }
+  }
+}
+
+function updateCharacterPanelChoiceFromPointer(p) {
+  if (!CHARACTER_SELECT.panelOpen) return;
+  const layout = characterPanelLayout();
+  for (const slot of layout.slots) {
+    if (pointInRect(p, slot)) {
+      CHARACTER_SELECT.hoverIndex = slot.index;
+      return;
+    }
+  }
+  CHARACTER_SELECT.hoverIndex = -1;
+}
+
+function updateTwoPlayerChoiceFromPointer(p) {
+  const layout = twoPlayerSetupLayout();
+  for (let i = 0; i < layout.cards.length; i += 1) {
+    if (pointInRect(p, layout.cards[i])) {
+      APP_FLOW.twoPlayerChoice = i;
+      return;
+    }
+  }
+}
+
+function startSelectedMenuMode() {
+  const layout = modeSelectLayout();
+  const choice = layout.buttons[APP_FLOW.menuChoice] || layout.buttons[0];
+  startModeSelection(choice.id);
+}
+
+function startModeSelection(mode) {
+  if (mode === "twoPlayer") {
+    openTwoPlayerSetup();
+    return;
+  }
+  startOnePlayerMode();
+}
+
+function openShortcuts() {
+  APP_FLOW.screen = "shortcuts";
+  APP_FLOW.pauseMenuOpen = false;
+  CHARACTER_SELECT.panelOpen = false;
+  clearGameplayInput();
+}
+
+function openTwoPlayerSetup() {
+  APP_FLOW.screen = "twoPlayerSetup";
+  APP_FLOW.selectedMode = "twoPlayer";
+  APP_FLOW.pauseMenuOpen = false;
+  APP_FLOW.twoPlayerChoice = 0;
+  APP_FLOW.roomCodeMode = "join";
+  clearGameplayInput();
+}
+
+function runSelectedTwoPlayerSetupChoice() {
+  const layout = twoPlayerSetupLayout();
+  const choiceIndex = APP_FLOW.roomCodeInput && APP_FLOW.twoPlayerChoice === 0 ? 1 : APP_FLOW.twoPlayerChoice;
+  const choice = layout.cards[choiceIndex] || layout.cards[0];
+  runTwoPlayerSetupChoice(choice.id);
+}
+
+function runTwoPlayerSetupChoice(id) {
+  if (id === "create") {
+    startTwoPlayerMode("");
+    return;
+  }
+  APP_FLOW.roomCodeMode = "join";
+  const code = normalizeRoomCodeInput(APP_FLOW.roomCodeInput);
+  APP_FLOW.roomCodeInput = code;
+  if (code) {
+    startTwoPlayerMode(code);
+  }
+}
+
+function normalizeRoomCodeInput(value) {
+  return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+}
+
+function appendRoomCodeInput(key) {
+  if (!/^[a-z0-9]$/i.test(key)) return false;
+  APP_FLOW.roomCodeInput = normalizeRoomCodeInput(`${APP_FLOW.roomCodeInput}${key}`);
+  if (APP_FLOW.twoPlayerChoice === 0) APP_FLOW.twoPlayerChoice = 1;
+  return true;
+}
+
+function trimRoomCodeInput() {
+  APP_FLOW.roomCodeInput = APP_FLOW.roomCodeInput.slice(0, -1);
+}
+
+function startOnePlayerMode() {
+  APP_FLOW.screen = "game";
+  APP_FLOW.selectedMode = "onePlayer";
+  APP_FLOW.pauseMenuOpen = false;
+  player.characterId = selectedCharacterId();
+  ai.characterId = chooseOpponentCharacterId(player.characterId);
+  clearGameplayInput();
+  resetMatch();
+}
+
+function startTwoPlayerMode(roomCode = "") {
+  const normalizedRoomCode = normalizeRoomCodeInput(roomCode);
+  APP_FLOW.selectedMode = "twoPlayer";
+  APP_FLOW.pauseMenuOpen = false;
+  player.characterId = selectedCharacterId();
+  ai.characterId = "zenitsu";
+  if (shouldRedirectToOnlineProduction()) {
+    navigateToProductionOnline(normalizedRoomCode);
+    return;
+  }
+  APP_FLOW.screen = "game";
+  clearGameplayInput();
+  setOnlineModeInUrl(normalizedRoomCode);
+  ONLINE.enabled = true;
+  ONLINE.status = "connecting";
+  ONLINE.socket = null;
+  ONLINE.serverUrl = "";
+  ONLINE.room = normalizedRoomCode || new URLSearchParams(window.location.search).get("room") || "";
+  ONLINE.playerId = null;
+  ONLINE.role = null;
+  ONLINE.lastInputSent = 0;
+  ONLINE.lastInputAt = 0;
+  ONLINE.lastPingAt = 0;
+  ONLINE.lastPongAt = 0;
+  ONLINE.rttMs = null;
+  ONLINE.reconnectAt = 0;
+  ONLINE.snapshotAt = 0;
+  ONLINE.message = "";
+  initOnlineMode();
+}
+
+function returnToModeSelect() {
+  APP_FLOW.screen = "menu";
+  APP_FLOW.pauseMenuOpen = false;
+  APP_FLOW.selectedMode = "onePlayer";
+  APP_FLOW.twoPlayerChoice = 0;
+  APP_FLOW.roomCodeInput = "";
+  APP_FLOW.roomCodeMode = "join";
+  closeOnlineConnection();
+  clearOnlineModeInUrl();
+  clearGameplayInput();
+  resetMatch();
+}
+
+function closeOnlineConnection() {
+  const socket = ONLINE.socket;
+  ONLINE.enabled = false;
+  ONLINE.status = "off";
+  ONLINE.socket = null;
+  ONLINE.serverUrl = "";
+  ONLINE.room = "";
+  ONLINE.playerId = null;
+  ONLINE.role = null;
+  ONLINE.lastInputSent = 0;
+  ONLINE.lastInputAt = 0;
+  ONLINE.lastPingAt = 0;
+  ONLINE.lastPongAt = 0;
+  ONLINE.rttMs = null;
+  ONLINE.reconnectAt = 0;
+  ONLINE.snapshotAt = 0;
+  ONLINE.message = "";
+  if (socket && socket.readyState !== WebSocket.CLOSED && socket.readyState !== WebSocket.CLOSING) {
+    socket.close();
+  }
+}
+
+function shouldRedirectToOnlineProduction() {
+  if (new URLSearchParams(window.location.search).get("server")) return false;
+  return location.protocol === "file:" || location.hostname.endsWith("github.io");
+}
+
+function navigateToProductionOnline(roomCode = "") {
+  const url = new URL(ONLINE_PRODUCTION_ORIGIN);
+  url.searchParams.set("mode", "online");
+  const code = normalizeRoomCodeInput(roomCode);
+  if (code) url.searchParams.set("room", code);
+  url.searchParams.set("character", selectedCharacterId());
+  window.location.assign(url.toString());
+}
+
+function setOnlineModeInUrl(roomCode = "") {
+  if (!window.history || !window.history.pushState) return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("mode", "online");
+  const code = normalizeRoomCodeInput(roomCode);
+  if (code) url.searchParams.set("room", code);
+  else url.searchParams.delete("room");
+  url.searchParams.delete("previewResult");
+  window.history.pushState(null, "", url);
+}
+
+function clearOnlineModeInUrl() {
+  if (!window.history || !window.history.pushState) return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("mode");
+  url.searchParams.delete("room");
+  url.searchParams.delete("debug");
+  url.searchParams.delete("character");
+  url.searchParams.delete("previewResult");
+  window.history.pushState(null, "", url);
+}
+
+function clearGameplayInput() {
+  input.left = false;
+  input.right = false;
+  input.up = false;
+  input.down = false;
+  input.hit = false;
+  input.hitArmed = true;
+  input.hitHold = 0;
+  input.hitQueued = false;
+  input.hitQueueTimer = 0;
+  input.hitPulse = 0;
+  input.specialPulse = 0;
+  input.queuedSpecial = false;
+  input.aim = 0;
+  input.pointerId = null;
+  input.stickPointerId = null;
+  input.stick.x = 0;
+  input.stick.y = 0;
+  input.mouseAim = null;
+}
+
 window.addEventListener("keydown", (event) => {
   const key = keyCode(event.key);
-  if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(key)) {
+  if (["arrowleft", "arrowright", "arrowup", "arrowdown", " ", "enter", "backspace", "escape"].includes(key)) {
     event.preventDefault();
+  }
+  if (isShortcutsOpen()) {
+    if (key === "escape" || key === "backspace" || key === "h" || key === " " || key === "enter") {
+      returnToModeSelect();
+    }
+    return;
+  }
+  if (isMenuOpen()) {
+    if (CHARACTER_SELECT.panelOpen) {
+      if (key === "escape" || key === "c") {
+        CHARACTER_SELECT.panelOpen = false;
+      } else if (key === "arrowleft" || key === "a") {
+        moveCharacterPanelChoice(-1);
+      } else if (key === "arrowright" || key === "d") {
+        moveCharacterPanelChoice(1);
+      } else if (key === "arrowup" || key === "w") {
+        moveCharacterPanelChoice(-4);
+      } else if (key === "arrowdown" || key === "s") {
+        moveCharacterPanelChoice(4);
+      } else if (key === " " || key === "enter") {
+        if (setSelectedCharacterIndex(CHARACTER_SELECT.panelChoice)) {
+          CHARACTER_SELECT.panelOpen = false;
+        }
+      }
+      return;
+    }
+    if (key === "arrowup" || key === "w") {
+      APP_FLOW.menuChoice = Math.max(0, APP_FLOW.menuChoice - 1);
+    } else if (key === "arrowdown" || key === "s") {
+      APP_FLOW.menuChoice = Math.min(1, APP_FLOW.menuChoice + 1);
+    } else if (key === "arrowleft" || key === "a") {
+      cycleSelectedCharacter(-1);
+    } else if (key === "arrowright" || key === "d") {
+      cycleSelectedCharacter(1);
+    } else if (key === "c") {
+      openCharacterPanel();
+    } else if (key === "h") {
+      openShortcuts();
+    } else if (key === "1") {
+      APP_FLOW.menuChoice = 0;
+      startModeSelection("onePlayer");
+    } else if (key === "2") {
+      APP_FLOW.menuChoice = 1;
+      startModeSelection("twoPlayer");
+    } else if (key === " " || key === "enter") {
+      startSelectedMenuMode();
+    }
+    return;
+  }
+  if (isTwoPlayerSetupOpen()) {
+    if (key === "escape" || key === "h") {
+      returnToModeSelect();
+    } else if (key === "arrowup" || key === "w") {
+      APP_FLOW.twoPlayerChoice = Math.max(0, APP_FLOW.twoPlayerChoice - 1);
+      if (APP_FLOW.twoPlayerChoice > 0) APP_FLOW.roomCodeMode = "join";
+    } else if (key === "arrowdown" || key === "s") {
+      APP_FLOW.twoPlayerChoice = Math.min(1, APP_FLOW.twoPlayerChoice + 1);
+      if (APP_FLOW.twoPlayerChoice > 0) APP_FLOW.roomCodeMode = "join";
+    } else if (key === "backspace") {
+      if (APP_FLOW.roomCodeInput) trimRoomCodeInput();
+      else returnToModeSelect();
+    } else if (key === " " || key === "enter") {
+      runSelectedTwoPlayerSetupChoice();
+    } else if (appendRoomCodeInput(key)) {
+      APP_FLOW.roomCodeMode = "join";
+    }
+    return;
+  }
+  if (APP_FLOW.pauseMenuOpen) {
+    if (key === "escape" || key === "p" || key === " " || key === "enter") {
+      continueFromPauseMenu();
+    } else if (key === "h" || key === "m" || key === "backspace") {
+      returnToModeSelect();
+    }
+    return;
   }
   if (state.phase === "matchOver") {
     if (key === "r") {
@@ -987,6 +1898,7 @@ window.addEventListener("keydown", (event) => {
   if (key === "1") setTheme(0);
   if (key === "2") setTheme(1);
   if (key === "3") setTheme(2);
+  if (key === "4") setTheme(3);
   if (key === "e") {
     if (input.hitArmed) {
       queueSpecialHit();
@@ -1015,43 +1927,99 @@ window.addEventListener("keyup", (event) => {
 
 canvas.addEventListener("pointerdown", (event) => {
   const p = pointerToCanvas(event);
+  if (isShortcutsOpen()) {
+    if (tryShortcutsClick(p)) APP_FLOW.suppressNextClick = true;
+    return;
+  }
+  if (isMenuOpen()) {
+    if (tryCharacterPanelClick(p)) {
+      APP_FLOW.suppressNextClick = true;
+      return;
+    }
+    if (tryModeSelectClick(p)) APP_FLOW.suppressNextClick = true;
+    return;
+  }
+  if (isTwoPlayerSetupOpen()) {
+    if (tryTwoPlayerSetupClick(p)) APP_FLOW.suppressNextClick = true;
+    return;
+  }
   const controls = controlLayout();
   canvas.setPointerCapture(event.pointerId);
+  if (tryPauseMenuClick(p)) {
+    APP_FLOW.suppressNextClick = true;
+    return;
+  }
+  if (tryHomeActionClick(p, controls)) {
+    APP_FLOW.suppressNextClick = true;
+    return;
+  }
   if (state.phase === "matchOver") return;
-  if (tryHudActionClick(p, controls)) return;
-  if (tryThemeClick(p, controls)) return;
+  if (tryHudActionClick(p, controls)) {
+    APP_FLOW.suppressNextClick = true;
+    return;
+  }
+  if (tryThemeClick(p, controls)) {
+    APP_FLOW.suppressNextClick = true;
+    return;
+  }
   if (distance2(p.x, p.y, controls.stick.x, controls.stick.y) < controls.stick.hot * controls.stick.hot) {
     input.stickPointerId = event.pointerId;
     setStickFromPointer(p);
     return;
   }
-  if (distance2(p.x, p.y, controls.racket.x, controls.racket.y) < controls.racket.hot * controls.racket.hot) {
-    input.pointerId = event.pointerId;
-    queueHit({ hold: 0, special: false });
-    return;
-  }
-  if (distance2(p.x, p.y, controls.special.x, controls.special.y) < controls.special.hot * controls.special.hot) {
+  const attackControl = attackControlAt(p, controls);
+  if (attackControl === "special") {
     input.pointerId = event.pointerId;
     queueSpecialHit();
+    APP_FLOW.suppressNextClick = true;
+    return;
+  }
+  if (attackControl === "racket") {
+    input.pointerId = event.pointerId;
+    queueHit({ hold: 0, special: false });
+    APP_FLOW.suppressNextClick = true;
     return;
   }
   input.mouseAim = screenToWorld(p.x, p.y);
 });
 
 canvas.addEventListener("click", (event) => {
+  if (APP_FLOW.suppressNextClick) {
+    APP_FLOW.suppressNextClick = false;
+    return;
+  }
   const p = pointerToCanvas(event);
+  if (isShortcutsOpen()) {
+    tryShortcutsClick(p);
+    return;
+  }
+  if (isMenuOpen()) {
+    if (tryCharacterPanelClick(p)) return;
+    tryModeSelectClick(p);
+    return;
+  }
+  if (isTwoPlayerSetupOpen()) {
+    tryTwoPlayerSetupClick(p);
+    return;
+  }
   const controls = controlLayout();
+  if (tryPauseMenuClick(p)) return;
+  if (tryHomeActionClick(p, controls)) return;
   if (state.phase === "matchOver") {
     tryResultActionClick(p);
     return;
   }
+  if (tryHudActionClick(p, controls)) return;
   if (tryThemeClick(p, controls)) return;
-  if (distance2(p.x, p.y, controls.racket.x, controls.racket.y) < controls.racket.hot * controls.racket.hot) {
-    queueHit({ hold: 0, special: false });
+  const attackControl = attackControlAt(p, controls);
+  if (attackControl === "special") {
+    queueSpecialHit();
+    releaseTapInput();
     return;
   }
-  if (distance2(p.x, p.y, controls.special.x, controls.special.y) < controls.special.hot * controls.special.hot) {
-    queueSpecialHit();
+  if (attackControl === "racket") {
+    queueHit({ hold: 0, special: false });
+    releaseTapInput();
   }
 });
 
@@ -1099,6 +2067,17 @@ function pointInRect(p, rect) {
 
 canvas.addEventListener("pointermove", (event) => {
   const p = pointerToCanvas(event);
+  if (isShortcutsOpen()) return;
+  if (isMenuOpen()) {
+    updateCharacterPanelChoiceFromPointer(p);
+    if (CHARACTER_SELECT.panelOpen) return;
+    updateMenuChoiceFromPointer(p);
+    return;
+  }
+  if (isTwoPlayerSetupOpen()) {
+    updateTwoPlayerChoiceFromPointer(p);
+    return;
+  }
   if (event.pointerId === input.stickPointerId) {
     setStickFromPointer(p);
   } else {
@@ -1122,8 +2101,27 @@ function releasePointer(event) {
   }
 }
 
+function releaseTapInput() {
+  input.hit = false;
+  input.hitArmed = true;
+}
+
+function attackControlAt(p, controls) {
+  const special = controls.special;
+  const racket = controls.racket;
+  const inSpecial = distance2(p.x, p.y, special.x, special.y) <= special.hot * special.hot;
+  const inRacket = distance2(p.x, p.y, racket.x, racket.y) <= racket.hot * racket.hot;
+  const splitX = special.x + (racket.x - special.x) * 0.6;
+  if (inSpecial && inRacket) {
+    return p.x <= splitX ? "special" : "racket";
+  }
+  if (inSpecial) return "special";
+  if (inRacket && p.x > splitX + 4) return "racket";
+  return null;
+}
+
 function queueSpecialHit() {
-  input.hitPulse = 0.18;
+  input.specialPulse = 0.34;
   if (state.energy < 100) return;
   queueHit({ hold: 0.95, special: true });
 }
@@ -1133,7 +2131,7 @@ function queueHit({ hold = 0, special = false } = {}) {
   input.hitHold = Math.max(input.hitHold, hold);
   input.hitQueued = true;
   input.hitQueueTimer = TUNING.player.hitBuffer;
-  input.hitPulse = 0.18;
+  if (!special) input.hitPulse = 0.18;
   input.queuedSpecial = special;
   if (player.cooldown <= 0) {
     player.swing = Math.max(player.swing, 0.13);
@@ -1163,6 +2161,7 @@ function resetMatch() {
     sendOnline({ type: "action", action: "replay" });
     return;
   }
+  APP_FLOW.pauseMenuOpen = false;
   state.phase = "serveWait";
   state.pausedPhase = null;
   state.pausedMessage = "";
@@ -1210,7 +2209,8 @@ function continueResult() {
   resetMatch();
 }
 
-function togglePause() {
+function continueFromPauseMenu() {
+  APP_FLOW.pauseMenuOpen = false;
   if (state.phase === "paused") {
     state.phase = state.pausedPhase || (ball.inPlay ? "rally" : "serveWait");
     state.message = state.pausedMessage;
@@ -1218,7 +2218,18 @@ function togglePause() {
     state.pausedPhase = null;
     state.pausedMessage = "";
     state.pausedMessageSub = "";
+  }
+}
+
+function togglePause() {
+  if (ONLINE.enabled) {
+    APP_FLOW.pauseMenuOpen = !APP_FLOW.pauseMenuOpen;
+    return;
+  }
+  if (state.phase === "paused") {
+    continueFromPauseMenu();
   } else {
+    APP_FLOW.pauseMenuOpen = true;
     state.pausedPhase = state.phase;
     state.pausedMessage = state.message;
     state.pausedMessageSub = state.messageSub;
@@ -1243,6 +2254,7 @@ function gameLoop(now) {
 }
 
 function update(dt) {
+  if (APP_FLOW.screen !== "game") return;
   if (ONLINE.enabled) {
     updateOnline(dt);
     return;
@@ -1292,6 +2304,7 @@ function updateInput(dt) {
     }
   }
   input.hitPulse = Math.max(0, input.hitPulse - dt);
+  input.specialPulse = Math.max(0, input.specialPulse - dt);
   const horizontal = (input.right ? 1 : 0) - (input.left ? 1 : 0);
   input.aim = clamp(horizontal + input.stick.x, -1, 1);
 }
@@ -1758,7 +2771,22 @@ function pointText(me, other) {
 function render() {
   ctx.save();
   ctx.clearRect(0, 0, W, H);
-  if (state.shake > 0) {
+  if (isMenuOpen()) {
+    drawModeSelectScreen();
+    ctx.restore();
+    return;
+  }
+  if (isShortcutsOpen()) {
+    drawShortcutsScreen();
+    ctx.restore();
+    return;
+  }
+  if (isTwoPlayerSetupOpen()) {
+    drawTwoPlayerSetupScreen();
+    ctx.restore();
+    return;
+  }
+  if (APP_FLOW.screen === "game" && state.shake > 0) {
     const s = state.shake * 5;
     ctx.translate(rand(-s, s), rand(-s, s));
   }
@@ -1780,8 +2808,12 @@ function render() {
     drawResultScreen();
   } else {
     drawControls();
-    drawOverlay();
-    if (ONLINE.enabled) drawOnlineStatus();
+    if (APP_FLOW.pauseMenuOpen) {
+      drawPauseMenu();
+    } else {
+      drawOverlay();
+      if (ONLINE.enabled) drawOnlineStatus();
+    }
   }
   ctx.restore();
 }
@@ -1856,7 +2888,7 @@ function drawCourtLines() {
 
 function drawNet() {
   const theme = currentTheme();
-  const ui = uiSprites[theme.id];
+  const ui = uiSprites[theme.uiId || theme.id];
   const a = worldToScreen(-5.25, 0);
   const b = worldToScreen(5.25, 0);
   const left = Math.min(a.x, b.x);
@@ -1865,7 +2897,9 @@ function drawNet() {
   const span = right - left;
   if (ui?.net?.complete && ui.net.naturalWidth) {
     const width = span + (IS_PORTRAIT ? 54 : 72);
-    const height = IS_PORTRAIT ? 86 : 92;
+    const height = theme.ui?.netPreserveAspect
+      ? width * (ui.net.naturalHeight / ui.net.naturalWidth)
+      : (IS_PORTRAIT ? 86 : 92) * (theme.ui?.netHeightScale || 1);
     ctx.drawImage(ui.net, left - (width - span) / 2, y - height / 2, width, height);
     return;
   }
@@ -1970,25 +3004,29 @@ function drawChair() {
 }
 
 function drawScoreBackboard() {
+  if (!SHOW_PROTOTYPE_BADGE) return;
   if (IS_PORTRAIT) {
-    const x = (W - 270) / 2;
+    const width = 160;
+    const x = (W - width) / 2;
     ctx.fillStyle = "rgba(8, 15, 18, 0.72)";
-    ctx.fillRect(x, 132, 270, 58);
+    ctx.fillRect(x, 136, width, 48);
     ctx.strokeStyle = "#5f7276";
     ctx.lineWidth = 3;
-    ctx.strokeRect(x, 132, 270, 58);
-    pixelText("PIXEL TENNIS", x + 48, 156, 15, "#dcebee");
-    pixelText("WEB PROTOTYPE", x + 42, 178, 14, "#b5e8ff");
+    ctx.strokeRect(x, 136, width, 48);
+    drawPixelTextCentered("PIXEL TENNIS", W / 2, 156, 11, "#dcebee");
+    drawPixelTextCentered("WEB PROTOTYPE", W / 2, 176, 9, "#b5e8ff");
     return;
   }
+  const width = 288;
+  const x = Math.round((W - width) / 2);
   ctx.fillStyle = "rgba(8, 15, 18, 0.72)";
-  ctx.fillRect(306, 92, 348, 66);
+  ctx.fillRect(x, 92, width, 66);
   ctx.strokeStyle = "#5f7276";
   ctx.lineWidth = 3;
-  ctx.strokeRect(306, 92, 348, 66);
+  ctx.strokeRect(x, 92, width, 66);
   ctx.fillStyle = "#dcebee";
-  pixelText("PIXEL TENNIS", 363, 116, 18, "#dcebee");
-  pixelText("WEB PROTOTYPE", 340, 142, 16, "#b5e8ff");
+  drawPixelTextCentered("PIXEL TENNIS", W / 2, 116, 18, "#dcebee");
+  drawPixelTextCentered("WEB PROTOTYPE", W / 2, 142, 14, "#b5e8ff");
 }
 
 function drawBallTrail() {
@@ -2021,7 +3059,7 @@ function drawActor(actor) {
   const isPlayer = actor.side === "player";
   const dir = viewDepthY(actor.y) > 0 ? -1 : 1;
   const bob = Math.sin(actor.pose * 9) * (Math.hypot(actor.vx, actor.vy) > 0.5 ? 2 : 0);
-  const sprite = actor.side === "player" ? actorSprites.player : actorSprites.ai;
+  const sprite = spriteForCharacterId(actor.characterId);
 
   ctx.fillStyle = "rgba(0,0,0,0.32)";
   ctx.fillRect(x - 24, y + 20, 48, 8);
@@ -2153,49 +3191,98 @@ function drawHud() {
 }
 
 function drawHudActionButtons(controls) {
+  const home = controls.actions.home;
   const reset = controls.actions.reset;
   const pause = controls.actions.pause;
   ctx.fillStyle = IS_PORTRAIT ? "rgba(12,19,24,0.54)" : "rgba(12,19,24,0.72)";
+  ctx.fillRect(home.x, home.y, home.width, home.height);
   ctx.fillRect(reset.x, reset.y, reset.width, reset.height);
   ctx.fillRect(pause.x, pause.y, pause.width, pause.height);
   ctx.strokeStyle = "rgba(207, 239, 230, 0.22)";
   ctx.lineWidth = 2;
+  ctx.strokeRect(home.x, home.y, home.width, home.height);
   ctx.strokeRect(reset.x, reset.y, reset.width, reset.height);
   ctx.strokeRect(pause.x, pause.y, pause.width, pause.height);
+  pixelText("H", home.x + (IS_PORTRAIT ? 14 : 16), home.y + (IS_PORTRAIT ? 28 : 32), IS_PORTRAIT ? 19 : 22, "#f1f4ff");
   pixelText("R", reset.x + (IS_PORTRAIT ? 15 : 17), reset.y + (IS_PORTRAIT ? 28 : 32), IS_PORTRAIT ? 19 : 22, "#f1f4ff");
   pixelText("II", pause.x + (IS_PORTRAIT ? 12 : 14), pause.y + (IS_PORTRAIT ? 28 : 32), IS_PORTRAIT ? 17 : 20, "#f1f4ff");
 }
 
 function drawEnergyBar() {
   const controls = controlLayout();
-  const { x, y } = controls.energy;
-  const barWidth = controls.energy.width;
-  const barHeight = controls.energy.height;
-  ctx.fillStyle = "#151b22";
-  ctx.fillRect(x, y, barWidth, barHeight);
-  ctx.strokeStyle = "#f1c64e";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(x - 2, y - 2, barWidth + 4, barHeight + 4);
-  const innerHeight = barHeight - 8;
-  const h = Math.round(innerHeight * (state.energy / 100));
-  const grad = ctx.createLinearGradient(0, y + barHeight, 0, y);
-  grad.addColorStop(0, "#27d8f2");
-  grad.addColorStop(1, "#91f7ff");
-  ctx.fillStyle = grad;
-  ctx.fillRect(x + 5, y + barHeight - 4 - h, barWidth - 10, h);
-  ctx.fillStyle = "#f4d14a";
-  ctx.fillRect(x + 3, y - 12, barWidth - 6, 14);
+  const amount = clamp(state.energy / 100, 0, 1);
+  const center = controls.special;
+  const radius = center.radius + (IS_PORTRAIT ? 12 : 13);
+  const lineWidth = IS_PORTRAIT ? 8 : 9;
+  const start = -Math.PI / 2;
+  const end = start + Math.PI * 2 * amount;
+  const pulse = state.energy >= 100 ? 0.5 + Math.sin(performance.now() * 0.008) * 0.5 : 0;
+
+  ctx.save();
+  ctx.lineCap = "butt";
+  ctx.shadowBlur = state.energy >= 100 ? 18 + pulse * 8 : 0;
+  ctx.shadowColor = "rgba(112, 246, 255, 0.78)";
+  ctx.strokeStyle = "rgba(5, 12, 18, 0.72)";
+  ctx.lineWidth = lineWidth + 5;
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(155, 214, 226, 0.3)";
+  ctx.lineWidth = lineWidth;
+  ctx.beginPath();
+  ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  if (amount > 0) {
+    const grad = ctx.createLinearGradient(center.x - radius, center.y + radius, center.x + radius, center.y - radius);
+    grad.addColorStop(0, "#24d8ff");
+    grad.addColorStop(0.55, "#7cf5ff");
+    grad.addColorStop(1, state.energy >= 100 ? "#fff2a3" : "#5bffce");
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.arc(center.x, center.y, radius, start, end);
+    ctx.stroke();
+  }
+
+  const tickCount = 12;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.34)";
+  ctx.lineWidth = 2;
+  for (let i = 0; i < tickCount; i += 1) {
+    const a = start + (Math.PI * 2 * i) / tickCount;
+    const filled = i / tickCount <= amount;
+    ctx.strokeStyle = filled ? "rgba(255, 244, 171, 0.86)" : "rgba(180, 226, 238, 0.25)";
+    ctx.beginPath();
+    ctx.moveTo(center.x + Math.cos(a) * (radius - 7), center.y + Math.sin(a) * (radius - 7));
+    ctx.lineTo(center.x + Math.cos(a) * (radius + 3), center.y + Math.sin(a) * (radius + 3));
+    ctx.stroke();
+  }
+
+  const label = state.energy >= 100 ? "READY" : "SP";
+  const labelWidth = state.energy >= 100 ? 66 : 34;
+  const labelX = center.x - labelWidth / 2;
+  const labelY = center.y - radius - 30;
+  ctx.fillStyle = state.energy >= 100 ? "rgba(60, 42, 6, 0.78)" : "rgba(6, 18, 24, 0.72)";
+  ctx.strokeStyle = state.energy >= 100 ? "rgba(255, 232, 119, 0.9)" : "rgba(124, 245, 255, 0.48)";
+  ctx.lineWidth = 2;
+  ctx.fillRect(labelX, labelY, labelWidth, 22);
+  ctx.strokeRect(labelX, labelY, labelWidth, 22);
+  drawPixelTextCentered(label, center.x, labelY + 16, 12, state.energy >= 100 ? "#fff4a8" : "#c9f8ff");
+  ctx.restore();
 }
 
 function drawControls() {
   const controls = controlLayout();
   const theme = currentTheme();
-  const ui = uiSprites[theme.id];
+  const ui = uiSprites[theme.uiId || theme.id];
   drawThemeButtons(controls);
 
   if (ui?.joystick?.complete && ui.joystick.naturalWidth) {
-    const size = controls.stick.radius * (IS_PORTRAIT ? 2.5 : 2.25);
-    drawCenteredImageContain(ui.joystick, controls.stick.x, controls.stick.y, size, size);
+    const width = controls.stick.radius * (IS_PORTRAIT ? 2.5 : 2.25) * uiControlScale(theme, "joystick");
+    drawControlPlate(controls.stick.x, controls.stick.y, width / 2);
+    drawCenteredImageFixedWidth(ui.joystick, controls.stick.x, controls.stick.y, width);
   } else {
     ctx.fillStyle = "rgba(18, 33, 45, 0.42)";
     ctx.strokeStyle = "rgba(187, 230, 247, 0.45)";
@@ -2215,14 +3302,22 @@ function drawControls() {
     ctx.fill();
   }
 
+  const specialReady = state.energy >= 100;
+  const specialPressed = input.specialPulse > 0 || input.queuedSpecial;
+  const specialPulse = specialPressed ? 1 : 0;
   if (ui?.special?.complete && ui.special.naturalWidth) {
-    const size = controls.special.radius * (IS_PORTRAIT ? 2.45 : 2.35);
-    drawCenteredImageContain(ui.special, controls.special.x, controls.special.y, size, size);
+    const width = (controls.special.radius * (IS_PORTRAIT ? 2.75 : 2.65) + specialPulse * 10) * uiControlScale(theme, "special");
+    const offset = uiControlOffset(theme, "special");
+    ctx.save();
+    ctx.globalAlpha = specialReady ? 1 : 0.82;
+    drawControlPlate(controls.special.x + offset.x, controls.special.y + offset.y, Math.min(width / 2, controls.special.radius + 10), 0.76);
+    drawCenteredImageFixedWidth(ui.special, controls.special.x + offset.x, controls.special.y + offset.y, width);
+    ctx.restore();
   } else {
-    ctx.fillStyle = "rgba(21, 54, 69, 0.55)";
-    ctx.strokeStyle = "rgba(107, 218, 255, 0.56)";
+    ctx.fillStyle = specialReady ? "rgba(21, 88, 105, 0.68)" : "rgba(21, 54, 69, 0.55)";
+    ctx.strokeStyle = specialReady ? "rgba(103, 244, 255, 0.86)" : "rgba(107, 218, 255, 0.56)";
     ctx.beginPath();
-    ctx.arc(controls.special.x, controls.special.y, controls.special.radius, 0, Math.PI * 2);
+    ctx.arc(controls.special.x, controls.special.y, controls.special.radius + specialPulse * 5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.strokeStyle = "#3ce7ff";
@@ -2231,17 +3326,25 @@ function drawControls() {
     ctx.arc(controls.special.x, controls.special.y, IS_PORTRAIT ? 19 : 22, 0.5, 4.8);
     ctx.stroke();
   }
+  if (specialPressed) {
+    ctx.strokeStyle = specialReady ? "rgba(255,255,255,0.76)" : "rgba(255, 224, 112, 0.78)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(controls.special.x, controls.special.y, controls.special.radius + 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   const ready = state.energy >= 100;
-  const pressed = input.hit || input.hitQueued || input.hitPulse > 0;
+  const pressed = input.hitPulse > 0 || (!input.queuedSpecial && (input.hit || input.hitQueued));
   const glow = ready ? 1 : 0.35;
   const pulse = pressed ? 1 : 0;
   const radius = controls.racket.radius + pulse * 6;
   if (ui?.hit?.complete && ui.hit.naturalWidth) {
-    const size = radius * (IS_PORTRAIT ? 2.15 : 2.0);
+    const width = radius * (IS_PORTRAIT ? 2.35 : 2.2) * uiControlScale(theme, "hit");
     ctx.save();
     ctx.globalAlpha = ready ? 1 : 0.94 + glow * 0.03;
-    drawCenteredImageContain(ui.hit, controls.racket.x, controls.racket.y, size, size);
+    drawControlPlate(controls.racket.x, controls.racket.y, width / 2);
+    drawCenteredImageFixedWidth(ui.hit, controls.racket.x, controls.racket.y, width);
     ctx.restore();
     if (pressed) {
       ctx.strokeStyle = "rgba(255,255,255,0.72)";
@@ -2272,37 +3375,42 @@ function drawControls() {
 function drawThemeButtons(controls) {
   controls.themes.forEach((button, index) => {
     const theme = THEMES[index];
+    const image = themeImages[index];
     const selected = index === state.themeIndex;
     const x = button.x;
     const y = button.y;
     const size = button.size;
-    ctx.fillStyle = selected ? "rgba(255, 235, 145, 0.92)" : "rgba(7, 12, 18, 0.72)";
-    ctx.fillRect(x - 3, y - 3, size + 6, size + 6);
-    ctx.fillStyle = "#111720";
+    const inset = 5;
+    ctx.fillStyle = selected ? "rgba(255, 235, 145, 0.94)" : "rgba(7, 12, 18, 0.76)";
     ctx.fillRect(x, y, size, size);
-    ctx.fillStyle = theme.swatch[0];
-    ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
-    ctx.fillStyle = theme.swatch[1];
-    ctx.fillRect(x + 4, y + size - 11, size - 8, 7);
-    ctx.fillStyle = theme.swatch[2];
-    if (theme.button === "castle") {
-      ctx.fillRect(x + 10, y + 8, 8, 22);
-      ctx.fillRect(x + 18, y + 14, 10, 6);
-      ctx.fillRect(x + 24, y + 6, 6, 22);
-    } else if (theme.button === "island") {
-      ctx.fillRect(x + 15, y + 12, 4, 18);
-      ctx.fillRect(x + 7, y + 9, 13, 5);
-      ctx.fillRect(x + 17, y + 7, 13, 5);
-      ctx.fillRect(x + 18, y + 13, 10, 5);
+    ctx.fillStyle = "#111720";
+    ctx.fillRect(x + 3, y + 3, size - 6, size - 6);
+    if (image && image.complete && image.naturalWidth) {
+      drawThemeThumbnail(image, x + inset, y + inset, size - inset * 2, theme.thumbnail);
+      ctx.fillStyle = selected ? "rgba(255, 238, 150, 0.08)" : "rgba(0, 0, 0, 0.14)";
+      ctx.fillRect(x + inset, y + inset, size - inset * 2, size - inset * 2);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.18)";
+      ctx.fillRect(x + inset + 3, y + inset + 3, size - inset * 2 - 6, 2);
     } else {
-      ctx.beginPath();
-      ctx.moveTo(x + size / 2, y + 8);
-      ctx.lineTo(x + size - 7, y + size - 7);
-      ctx.lineTo(x + 7, y + size - 7);
-      ctx.closePath();
-      ctx.fill();
+      ctx.fillStyle = theme.swatch[0];
+      ctx.fillRect(x + inset, y + inset, size - inset * 2, size - inset * 2);
+      ctx.fillStyle = theme.swatch[1];
+      ctx.fillRect(x + inset, y + size - inset - 7, size - inset * 2, 7);
     }
+    ctx.strokeStyle = selected ? "#fff1a8" : "rgba(178, 235, 245, 0.52)";
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.strokeRect(x + 2, y + 2, size - 4, size - 4);
   });
+}
+
+function drawThemeThumbnail(image, x, y, size, thumbnail = {}) {
+  const focusX = thumbnail.x ?? 0.5;
+  const focusY = thumbnail.y ?? 0.5;
+  const zoom = thumbnail.zoom ?? 1;
+  const sourceSize = Math.max(1, Math.min(image.naturalWidth, image.naturalHeight) * zoom);
+  const sx = Math.max(0, Math.min(image.naturalWidth - sourceSize, image.naturalWidth * focusX - sourceSize / 2));
+  const sy = Math.max(0, Math.min(image.naturalHeight - sourceSize, image.naturalHeight * focusY - sourceSize / 2));
+  ctx.drawImage(image, sx, sy, sourceSize, sourceSize, x, y, size, size);
 }
 
 function resultLayout() {
@@ -2501,8 +3609,8 @@ function drawResultHero(won, t) {
 }
 
 function resultHeroSprite() {
-  if (ONLINE.enabled && ONLINE.playerId === "p2") return actorSprites.ai;
-  return actorSprites.player;
+  if (ONLINE.enabled && ONLINE.playerId === "p2") return spriteForCharacterId(ai.characterId);
+  return spriteForCharacterId(player.characterId);
 }
 
 function drawFallbackResultHero(cx, cy, won) {
@@ -2684,6 +3792,41 @@ function drawOverlay() {
   }
 }
 
+function drawPauseMenu() {
+  const layout = pauseMenuLayout();
+  const box = layout.box;
+  ctx.save();
+  ctx.fillStyle = "rgba(2, 7, 11, 0.48)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(5, 11, 18, 0.9)";
+  ctx.strokeStyle = "rgba(255, 224, 112, 0.86)";
+  ctx.lineWidth = 4;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+  ctx.fillStyle = "rgba(28, 69, 78, 0.62)";
+  ctx.fillRect(box.x + 12, box.y + 12, box.width - 24, 50);
+  drawPixelTextCentered("PAUSED", box.x + box.width / 2, box.y + 46, 28, "#fff4b8");
+  drawPixelTextCentered(ONLINE.enabled ? "ONLINE MATCH MENU" : "MATCH MENU", box.x + box.width / 2, box.y + 92, 15, "#9ff4ff");
+
+  drawPauseMenuButton(layout.continue, "CONTINUE", true);
+  drawPauseMenuButton(layout.home, "HOME", false);
+  ctx.restore();
+}
+
+function drawPauseMenuButton(box, label, primary) {
+  ctx.save();
+  ctx.fillStyle = primary ? "rgba(26, 132, 120, 0.9)" : "rgba(38, 75, 104, 0.9)";
+  ctx.strokeStyle = primary ? "#fff1a8" : "rgba(178, 235, 245, 0.78)";
+  ctx.lineWidth = 4;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = "rgba(255,255,255,0.16)";
+  ctx.fillRect(box.x + 8, box.y + 8, box.width - 16, 5);
+  drawPixelTextCentered(label, box.x + box.width / 2, box.y + 38, label.length > 6 ? 20 : 23, "#fff8df");
+  ctx.restore();
+}
+
 function drawOnlineStatus() {
   if (!ONLINE.enabled) return;
   const stale = ONLINE.snapshotAt > 0 && performance.now() - ONLINE.snapshotAt > 2200;
@@ -2702,6 +3845,334 @@ function drawOnlineStatus() {
       online: ONLINE,
     });
   }
+}
+
+function drawModeSelectScreen() {
+  const layout = modeSelectLayout();
+  const background = menuSprites.background;
+  const logo = menuSprites.logo;
+  ctx.save();
+  if (background && background.complete && background.naturalWidth) {
+    drawCoverImage(background, 0, 0, W, H);
+    ctx.fillStyle = "rgba(3, 8, 12, 0.26)";
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = "rgba(3, 8, 12, 0.68)";
+    ctx.fillRect(0, 0, W, H);
+  }
+  ctx.fillStyle = "rgba(255, 232, 137, 0.1)";
+  ctx.fillRect(36, 84, W - 72, 4);
+  ctx.fillRect(36, H - 88, W - 72, 4);
+
+  if (logo && logo.complete && logo.naturalWidth) {
+    drawCenteredImageContain(logo, W / 2, layout.titleY + 8, W - 96, 150);
+  } else {
+    drawPixelTextCentered("PIXEL TENNIS", W / 2, layout.titleY, 34, "#fff6c4");
+  }
+
+  drawMenuSelectedCharacter(layout);
+  layout.buttons.forEach((button, index) => {
+    drawModeSelectButton(button, index === APP_FLOW.menuChoice, index);
+  });
+  drawShortcutButton(layout.shortcuts);
+  if (CHARACTER_SELECT.panelOpen) drawCharacterSelectPanel();
+  ctx.restore();
+}
+
+function drawShortcutButton(box) {
+  ctx.save();
+  const cx = box.x + box.width / 2;
+  const y = box.y + 21;
+  ctx.fillStyle = "rgba(143, 241, 255, 0.52)";
+  ctx.fillRect(cx - 38, box.y + 25, 76, 2);
+  ctx.fillStyle = "rgba(255, 241, 168, 0.78)";
+  ctx.fillRect(cx - 52, box.y + 14, 6, 6);
+  ctx.fillRect(cx + 46, box.y + 14, 6, 6);
+  drawPixelTextCentered("KEYS", cx, y, 16, "#dff8ff");
+  ctx.restore();
+}
+
+function drawShortcutsScreen() {
+  const layout = shortcutsLayout();
+  const box = layout.box;
+  ctx.save();
+  ctx.fillStyle = "rgba(1, 6, 10, 0.58)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(5, 12, 18, 0.92)";
+  ctx.strokeStyle = "rgba(255, 224, 112, 0.88)";
+  ctx.lineWidth = 4;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+
+  ctx.fillStyle = "rgba(32, 74, 83, 0.56)";
+  ctx.fillRect(box.x + 14, box.y + 14, box.width - 28, 54);
+  drawPixelTextCentered("KEYS", box.x + box.width / 2, box.y + 48, 27, "#fff4b8");
+
+  const rows = [
+    ["MOVE", "WASD / ARROW KEYS"],
+    ["HIT", "SPACE / ENTER"],
+    ["LOB", "HOLD UP + HIT"],
+    ["DROP", "HOLD DOWN + HIT"],
+    ["SPECIAL", "E WHEN ENERGY FULL"],
+    ["THEME", "1 / 2 / 3 / 4"],
+    ["PAUSE", "P"],
+    ["RESTART", "R"],
+    ["MENU", "H BUTTON OR PAUSE HOME"],
+    ["CHARACTER", "C ON HOME SCREEN"],
+    ["ROOM CODE", "TYPE CODE, ENTER JOIN"],
+    ["BACK", "ESC / BACKSPACE"],
+  ];
+  const rowY = box.y + 102;
+  const rowGap = IS_PORTRAIT ? 30 : 25;
+  const keyX = box.x + 30;
+  const valueX = box.x + (IS_PORTRAIT ? 152 : 168);
+  rows.forEach(([key, value], index) => {
+    const y = rowY + index * rowGap;
+    ctx.fillStyle = index % 2 ? "rgba(255,255,255,0.035)" : "rgba(109, 232, 255, 0.045)";
+    ctx.fillRect(box.x + 18, y - 18, box.width - 36, rowGap - 4);
+    pixelText(key, keyX, y, 13, "#8ff1ff");
+    pixelText(value, valueX, y, IS_PORTRAIT ? 12 : 13, "#f5fbff");
+  });
+
+  drawSmallPanelButton(layout.back, "BACK");
+  ctx.restore();
+}
+
+function drawSmallPanelButton(box, label) {
+  ctx.save();
+  ctx.fillStyle = "rgba(25, 65, 83, 0.9)";
+  ctx.strokeStyle = "rgba(178, 235, 245, 0.76)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  drawPixelTextCentered(label, box.x + box.width / 2, box.y + 26, 14, "#eaf9ff");
+  ctx.restore();
+}
+
+function drawTwoPlayerSetupScreen() {
+  const layout = twoPlayerSetupLayout();
+  const background = menuSprites.background;
+  const logo = menuSprites.logo;
+  ctx.save();
+  if (background && background.complete && background.naturalWidth) {
+    drawCoverImage(background, 0, 0, W, H);
+    ctx.fillStyle = "rgba(3, 8, 12, 0.38)";
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = "rgba(3, 8, 12, 0.78)";
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  if (logo && logo.complete && logo.naturalWidth) {
+    drawCenteredImageContain(logo, W / 2, layout.titleY, W - 170, 96);
+  } else {
+    drawPixelTextCentered("PIXEL TENNIS", W / 2, layout.titleY, 30, "#fff6c4");
+  }
+  drawPixelTextCentered("ONLINE ROOM", W / 2, layout.titleY + 76, 17, "#9ff4ff");
+
+  drawTwoPlayerBackButton(layout.back);
+  const activeChoice = APP_FLOW.roomCodeInput && APP_FLOW.twoPlayerChoice === 0 ? 1 : APP_FLOW.twoPlayerChoice;
+  layout.cards.forEach((card, index) => {
+    drawTwoPlayerSetupCard(card, index === activeChoice, index);
+  });
+  drawRoomCodeInput(layout.input);
+  ctx.restore();
+}
+
+function drawTwoPlayerBackButton(box) {
+  ctx.save();
+  ctx.fillStyle = "rgba(8, 20, 27, 0.78)";
+  ctx.strokeStyle = "rgba(178, 235, 245, 0.58)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  drawPixelTextCentered("BACK", box.x + box.width / 2, box.y + 26, 14, "#eaf9ff");
+  ctx.restore();
+}
+
+function drawTwoPlayerSetupCard(card, selected, index) {
+  const fills = [
+    ["rgba(24, 106, 97, 0.88)", "#fff1a8"],
+    ["rgba(37, 75, 112, 0.88)", "#9ff4ff"],
+  ];
+  const [fill, accent] = fills[index] || fills[0];
+  ctx.save();
+  ctx.fillStyle = selected ? fill : "rgba(7, 18, 27, 0.86)";
+  ctx.strokeStyle = selected ? accent : "rgba(178, 235, 245, 0.5)";
+  ctx.lineWidth = selected ? 4 : 3;
+  ctx.fillRect(card.x, card.y, card.width, card.height);
+  ctx.strokeRect(card.x, card.y, card.width, card.height);
+  ctx.fillStyle = "rgba(255,255,255,0.14)";
+  ctx.fillRect(card.x + 12, card.y + 10, card.width - 24, 4);
+  if (selected) {
+    ctx.fillStyle = accent;
+    ctx.fillRect(card.x - 14, card.y + 22, 8, card.height - 44);
+    ctx.fillRect(card.x + card.width + 6, card.y + 22, 8, card.height - 44);
+  }
+  drawPixelTextCentered(card.label, card.x + card.width / 2, card.y + 34, 23, selected ? "#fff8df" : "#eaf9ff");
+  drawPixelTextCentered(card.subLabel, card.x + card.width / 2, card.y + 58, 12, selected ? accent : "#9bc9d7");
+  ctx.restore();
+}
+
+function drawRoomCodeInput(box) {
+  const code = APP_FLOW.roomCodeInput || "----";
+  const activeLabel = "ROOM CODE";
+  ctx.save();
+  ctx.fillStyle = "rgba(4, 11, 17, 0.92)";
+  ctx.strokeStyle = APP_FLOW.roomCodeInput ? "#fff1a8" : "rgba(178, 235, 245, 0.52)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  pixelText(activeLabel, box.x + 18, box.y + 23, 13, "#9ff4ff");
+  drawPixelTextCentered(code, box.x + box.width / 2, box.y + 51, 25, APP_FLOW.roomCodeInput ? "#fff8df" : "#718996");
+  ctx.restore();
+}
+
+function drawMenuSelectedCharacter(layout) {
+  const character = selectedCharacter();
+  const box = layout.character;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  ctx.save();
+  ctx.fillStyle = "rgba(1, 7, 10, 0.34)";
+  ctx.fillRect(cx - 54, box.y + box.height - 22, 108, 9);
+  ctx.fillStyle = "rgba(143, 241, 255, 0.12)";
+  ctx.fillRect(cx - 34, box.y + box.height - 17, 68, 3);
+  drawMenuSprite(portraitForCharacterId(character.id), cx, cy - 10, 150, 190);
+  drawPixelTextCentered("<", box.x + 8, cy + 12, 30, "#fff1a8");
+  drawPixelTextCentered(">", box.x + box.width - 8, cy + 12, 30, "#fff1a8");
+  drawPixelTextCentered(character.name, cx, box.y + box.height + 20, 20, "#fff8df");
+  drawPixelTextCentered(character.role, cx, box.y + box.height + 40, 12, "#9ff4ff");
+  ctx.restore();
+}
+
+function drawCharacterSelectPanel() {
+  const layout = characterPanelLayout();
+  const box = layout.box;
+  ctx.save();
+  ctx.fillStyle = "rgba(2, 7, 11, 0.58)";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(5, 12, 18, 0.9)";
+  ctx.strokeStyle = "rgba(255, 224, 112, 0.86)";
+  ctx.lineWidth = 4;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  ctx.fillStyle = "rgba(28, 69, 78, 0.56)";
+  ctx.fillRect(box.x + 12, box.y + 12, box.width - 24, 48);
+  drawPixelTextCentered("CHOOSE CHARACTER", box.x + box.width / 2, box.y + 43, 22, "#fff4b8");
+  drawPixelTextCentered(`PAGE ${layout.page + 1}/${layout.pageCount}`, layout.pageLabel.x, layout.pageLabel.y, 12, "#9ff4ff");
+
+  drawCharacterPanelButton(layout.close, "CLOSE", false);
+  for (const slot of layout.slots) {
+    drawCharacterSlot(slot);
+  }
+  drawCharacterPanelButton(layout.prev, "<", false, layout.prev.disabled);
+  drawCharacterPanelButton(layout.next, ">", false, layout.next.disabled);
+  drawCharacterPanelButton(layout.confirm, "CONFIRM", true, !CHARACTERS[CHARACTER_SELECT.panelChoice]?.unlocked);
+  ctx.restore();
+}
+
+function drawCharacterSlot(slot) {
+  const character = CHARACTERS[slot.index];
+  const selected = slot.index === CHARACTER_SELECT.selectedIndex;
+  const focused = slot.index === CHARACTER_SELECT.panelChoice;
+  const hovered = slot.index === CHARACTER_SELECT.hoverIndex;
+  ctx.save();
+  ctx.fillStyle = character.unlocked ? "rgba(10, 28, 34, 0.88)" : "rgba(7, 12, 17, 0.78)";
+  ctx.strokeStyle = focused ? "#fff1a8" : selected ? "rgba(255, 241, 168, 0.72)" : hovered ? "#9ff4ff" : "rgba(178, 235, 245, 0.38)";
+  ctx.lineWidth = selected || focused || hovered ? 4 : 2;
+  ctx.fillRect(slot.x, slot.y, slot.width, slot.height);
+  ctx.strokeRect(slot.x, slot.y, slot.width, slot.height);
+  if (character.unlocked) {
+    drawMenuSprite(portraitForCharacterId(character.id), slot.x + slot.width / 2, slot.y + slot.height / 2 + 4, slot.width - 12, slot.height - 8);
+  } else {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.035)";
+    ctx.fillRect(slot.x + 12, slot.y + 12, slot.width - 24, slot.height - 24);
+    ctx.fillStyle = "rgba(143, 241, 255, 0.12)";
+    ctx.fillRect(slot.x + slot.width / 2 - 14, slot.y + slot.height / 2 - 2, 28, 4);
+    ctx.fillRect(slot.x + slot.width / 2 - 2, slot.y + slot.height / 2 - 14, 4, 28);
+  }
+  if (!selected) {
+    const label = String(slot.index + 1).padStart(2, "0");
+    ctx.fillStyle = "rgba(6, 18, 24, 0.72)";
+    ctx.fillRect(slot.x + 5, slot.y + 5, 24, 16);
+    drawPixelTextCentered(label, slot.x + 17, slot.y + 17, 10, "#c9f8ff");
+  }
+  ctx.restore();
+}
+
+function drawCharacterPanelButton(box, label, primary, disabled = false) {
+  ctx.save();
+  ctx.globalAlpha = disabled ? 0.42 : 1;
+  ctx.fillStyle = primary ? "rgba(26, 132, 120, 0.88)" : "rgba(8, 20, 27, 0.78)";
+  ctx.strokeStyle = primary ? "#fff1a8" : "rgba(178, 235, 245, 0.58)";
+  ctx.lineWidth = 3;
+  ctx.fillRect(box.x, box.y, box.width, box.height);
+  ctx.strokeRect(box.x, box.y, box.width, box.height);
+  drawPixelTextCentered(label, box.x + box.width / 2, box.y + (primary ? 29 : 23), primary ? 16 : 12, "#fff8df");
+  ctx.restore();
+}
+
+function drawMenuPlayerPlate(cx, cy, color) {
+  ctx.save();
+  ctx.fillStyle = "rgba(1, 7, 10, 0.46)";
+  ctx.fillRect(cx - 60, cy - 18, 120, 36);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(cx - 60, cy - 18, 120, 36);
+  ctx.restore();
+}
+
+function drawMenuSprite(sprite, cx, cy, maxWidth, maxHeight) {
+  if (sprite && sprite.complete && sprite.naturalWidth) {
+    drawCenteredImageContain(sprite, cx, cy, maxWidth, maxHeight);
+    return;
+  }
+  ctx.save();
+  ctx.fillStyle = "#f1d06b";
+  ctx.fillRect(cx - 24, cy - 52, 48, 86);
+  ctx.fillStyle = "#2e483f";
+  ctx.fillRect(cx - 18, cy - 70, 36, 32);
+  ctx.restore();
+}
+
+function drawModeSelectButton(button, selected, index) {
+  const sprite = menuSprites[button.assetKey];
+  const usingSprite = sprite && sprite.complete && sprite.naturalWidth;
+  if (usingSprite) {
+    ctx.drawImage(sprite, button.x, button.y, button.width, button.height);
+  } else {
+    drawModeButtonPlaceholder(button, selected, index);
+  }
+  if (usingSprite && !MENU_BUTTON_TEXT_OVERLAY) return;
+  const labelColor = selected ? "#fff9c9" : "#eaf9ff";
+  const subColor = selected ? "#7cf4ff" : "#a9dce8";
+  drawPixelTextCentered(button.label, button.x + button.width / 2, button.y + 42, 25, labelColor);
+  drawPixelTextCentered(button.subLabel, button.x + button.width / 2, button.y + 68, 13, subColor);
+}
+
+function drawModeButtonPlaceholder(button, selected, index) {
+  const theme = currentTheme();
+  const accent = index === 0 ? theme.swatch[1] : theme.swatch[0];
+  ctx.save();
+  ctx.fillStyle = selected ? "rgba(23, 56, 63, 0.92)" : "rgba(7, 20, 27, 0.9)";
+  ctx.fillRect(button.x, button.y, button.width, button.height);
+  ctx.fillStyle = selected ? "rgba(255, 230, 128, 0.16)" : "rgba(255, 255, 255, 0.06)";
+  ctx.fillRect(button.x + 8, button.y + 8, button.width - 16, button.height - 16);
+  ctx.strokeStyle = selected ? "#fff1a8" : "rgba(178, 235, 245, 0.62)";
+  ctx.lineWidth = selected ? 4 : 3;
+  ctx.strokeRect(button.x, button.y, button.width, button.height);
+  ctx.fillStyle = accent;
+  ctx.fillRect(button.x, button.y, 12, button.height);
+  ctx.fillRect(button.x + button.width - 12, button.y, 12, button.height);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+  ctx.fillRect(button.x + 24, button.y + 16, button.width - 48, 4);
+  if (selected) {
+    ctx.fillStyle = "#fff1a8";
+    ctx.fillRect(button.x - 16, button.y + 30, 8, 28);
+    ctx.fillRect(button.x + button.width + 8, button.y + 30, 8, 28);
+  }
+  ctx.restore();
 }
 
 function drawOnlineRoomPanel(stale) {
@@ -2857,6 +4328,20 @@ function drawCoverImage(image, x, y, width, height) {
   ctx.drawImage(image, sx, sy, sw, sh, x, y, width, height);
 }
 
+function drawCenteredImageFixedWidth(image, cx, cy, width) {
+  const height = width * (image.naturalHeight / image.naturalWidth);
+  ctx.drawImage(image, cx - width / 2, cy - height / 2, width, height);
+}
+
+function drawControlPlate(cx, cy, radius, alpha = 0.88) {
+  ctx.save();
+  ctx.fillStyle = `rgba(2, 11, 14, ${alpha})`;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawCenteredImageContain(image, cx, cy, maxWidth, maxHeight) {
   const ratio = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
   const width = image.naturalWidth * ratio;
@@ -2960,6 +4445,24 @@ window.PixelTennis = {
     const aiScreen = worldToScreen(ai.x, ai.y);
     const ballScreen = worldToScreen(ball.x, ball.y);
     return {
+      app: {
+        screen: APP_FLOW.screen,
+        selectedMode: APP_FLOW.selectedMode,
+        menuChoice: APP_FLOW.menuChoice,
+        twoPlayerChoice: APP_FLOW.twoPlayerChoice,
+        roomCodeInput: APP_FLOW.roomCodeInput,
+        roomCodeMode: APP_FLOW.roomCodeMode,
+        pauseMenuOpen: APP_FLOW.pauseMenuOpen,
+      },
+      characters: {
+        selected: selectedCharacterId(),
+        panelOpen: CHARACTER_SELECT.panelOpen,
+        page: CHARACTER_SELECT.page,
+        pageCount: characterPageCount(),
+        slotCount: CHARACTERS.length,
+        player: player.characterId,
+        ai: ai.characterId,
+      },
       phase: state.phase,
       message: state.message,
       rallyHits: state.rallyHits,
