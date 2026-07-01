@@ -2104,12 +2104,32 @@ canvas.addEventListener("pointerdown", (event) => {
   input.mouseAim = screenToWorld(p.x, p.y);
 });
 
+canvas.addEventListener("touchend", (event) => {
+  if (!isTwoPlayerSetupOpen() || !event.changedTouches?.length) return;
+  const touch = event.changedTouches[0];
+  const rect = canvas.getBoundingClientRect();
+  const p = {
+    x: ((touch.clientX - rect.left) / rect.width) * W,
+    y: ((touch.clientY - rect.top) / rect.height) * H,
+  };
+  const layout = twoPlayerSetupLayout();
+  if (pointInRect(p, layout.input)) {
+    focusRoomCodeNativeInput(layout.input);
+  }
+}, { passive: true });
+
 canvas.addEventListener("click", (event) => {
+  const p = pointerToCanvas(event);
   if (APP_FLOW.suppressNextClick) {
+    if (isTwoPlayerSetupOpen()) {
+      const layout = twoPlayerSetupLayout();
+      if (pointInRect(p, layout.input)) {
+        focusRoomCodeNativeInput(layout.input);
+      }
+    }
     APP_FLOW.suppressNextClick = false;
     return;
   }
-  const p = pointerToCanvas(event);
   if (isShortcutsOpen()) {
     tryShortcutsClick(p);
     return;

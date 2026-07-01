@@ -58,7 +58,7 @@ body {
   height: 1px;
   padding: 0;
   border: 0;
-  opacity: 0.01;
+  opacity: 0;
   pointer-events: none;
   color: transparent;
   caret-color: transparent;
@@ -73,6 +73,18 @@ body {
 
 #room-code-native-input.room-code-native-input--active {
   pointer-events: auto;
+  opacity: 1;
+  padding: 0 14px;
+  border: 3px solid #fff1a8;
+  color: #fff8df;
+  caret-color: #fff1a8;
+  background: rgba(4, 11, 17, 0.96);
+  box-shadow:
+    0 0 0 2px rgba(159, 244, 255, 0.26) inset,
+    0 8px 24px rgba(0, 0, 0, 0.34);
+  font-size: 22px;
+  line-height: 1;
+  text-align: center;
 }
 
 @media (max-width: 760px) {
