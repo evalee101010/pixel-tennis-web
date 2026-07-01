@@ -131,7 +131,7 @@ const NET_PHYS = {
 };
 
 const NET_SIM = {
-  snapshots: [], // [{at, players, ball}] newest last
+  snapshots: [], // [{at, receivedAt, serverTime, players, ball}] newest last
   inputSeq: 0,
   recentInputs: [], // [{seq, input}] for redundancy
   lastSentKey: "",
@@ -139,6 +139,8 @@ const NET_SIM = {
   corrX: 0,
   corrY: 0,
   lastAck: 0,
+  serverOffsetMs: null,
+  lastSnapshotAt: 0,
 };
 
 function netReset() {
@@ -149,6 +151,8 @@ function netReset() {
   NET_SIM.corrX = 0;
   NET_SIM.corrY = 0;
   NET_SIM.lastAck = 0;
+  NET_SIM.serverOffsetMs = null;
+  NET_SIM.lastSnapshotAt = 0;
 }
 
 let netDebug = null;
@@ -897,6 +901,7 @@ function onlineInputPayload() {
     hit: input.hit || input.hitQueued,
     special: input.queuedSpecial,
     aim: clamp(input.aim, -1, 1),
+    hitHold: clamp(input.hitHold, 0, 1.2),
     shotUp: input.up || input.stick.y < -0.25,
     shotDown: input.down || input.stick.y > 0.25,
     rttMs: ONLINE.rttMs === null ? null : Math.round(ONLINE.rttMs),
@@ -917,6 +922,7 @@ function inputPayloadKey(payload) {
     payload.left, payload.right, payload.up, payload.down,
     payload.hit, payload.special, payload.shotUp, payload.shotDown,
     Math.round((payload.aim || 0) * 20),
+    Math.round((payload.hitHold || 0) * 20),
   ].join(",");
 }
 
@@ -970,9 +976,29 @@ function updateOnline(dt) {
   }
 }
 
+function netSnapshotTime(packet, receivedAt) {
+  const serverTime = Number(packet.serverTime ?? packet.updatedAt);
+  if (!Number.isFinite(serverTime) || serverTime <= 0) return receivedAt;
+  const sampleOffset = receivedAt - serverTime;
+  if (NET_SIM.serverOffsetMs === null || !Number.isFinite(NET_SIM.serverOffsetMs)) {
+    NET_SIM.serverOffsetMs = sampleOffset;
+  } else {
+    const delta = sampleOffset - NET_SIM.serverOffsetMs;
+    const blend = Math.abs(delta) > 250 ? 0.18 : 0.06;
+    NET_SIM.serverOffsetMs += delta * blend;
+  }
+  const mappedAt = serverTime + NET_SIM.serverOffsetMs;
+  if (!Number.isFinite(mappedAt)) return receivedAt;
+  const at = Math.max(mappedAt, NET_SIM.lastSnapshotAt + 0.001);
+  NET_SIM.lastSnapshotAt = at;
+  return at;
+}
+
 function applyOnlineState(packet) {
-  ONLINE.snapshotAt = performance.now();
-  if (netDebug) netDebug.handleState(packet, ONLINE.snapshotAt);
+  const receivedAt = performance.now();
+  const snapshotAt = netSnapshotTime(packet, receivedAt);
+  ONLINE.snapshotAt = receivedAt;
+  if (netDebug) netDebug.handleState(packet, receivedAt);
   ONLINE.room = packet.room || ONLINE.room;
   state.phase = packet.phase || "waiting";
   state.timer = packet.timer ?? 0;
@@ -992,7 +1018,9 @@ function applyOnlineState(packet) {
 
   const players = packet.players || {};
   NET_SIM.snapshots.push({
-    at: ONLINE.snapshotAt,
+    at: snapshotAt,
+    receivedAt,
+    serverTime: Number(packet.serverTime ?? packet.updatedAt) || null,
     players,
     ball: packet.ball || null,
   });
@@ -1003,12 +1031,17 @@ function applyOnlineState(packet) {
 
   const isPlaying = ONLINE.role === "player" && (ONLINE.playerId === "p1" || ONLINE.playerId === "p2");
   if (isPlaying) {
-    // Remote actor: snapped here, then interpolated each frame in netSampleRemote.
     const localId = ONLINE.playerId;
     const remoteId = localId === "p1" ? "p2" : "p1";
     const remoteActor = remoteId === "p1" ? player : ai;
     const localActor = localId === "p1" ? player : ai;
-    applyOnlineActor(remoteActor, players[remoteId], remoteId === "p1" ? 9.9 : -9.9);
+    // Remote actor position is owned by netSampleRemote; snapping here fights
+    // interpolation whenever network packets arrive between render frames.
+    if (NET_SIM.snapshots.length <= 1) {
+      applyOnlineActor(remoteActor, players[remoteId], remoteId === "p1" ? 9.9 : -9.9);
+    } else {
+      applyOnlineActorMeta(remoteActor, players[remoteId]);
+    }
     // Local actor: position is predicted locally; only reconcile against server.
     netReconcile(localActor, players[localId], localId);
   } else {
@@ -1050,6 +1083,14 @@ function applyOnlineActor(actor, data, fallbackY) {
   actor.vx = Number(data.vx) || 0;
   actor.vy = Number(data.vy) || 0;
   actor.cooldown = Number(data.cooldown) || 0;
+  actor.energy = Number(data.energy) || 0;
+  if (data.characterId) actor.characterId = characterById(data.characterId).id;
+}
+
+function applyOnlineActorMeta(actor, data) {
+  if (!data) return;
+  actor.cooldown = Number(data.cooldown) || 0;
+  actor.energy = Number(data.energy) || 0;
   if (data.characterId) actor.characterId = characterById(data.characterId).id;
 }
 

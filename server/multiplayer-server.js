@@ -38,6 +38,8 @@ const PLAYER = {
   hitCooldown: 0.36,
   perfectRadius: 0.34,
   goodRadius: 0.78,
+  chargeTime: 0.78,
+  powerThreshold: 0.52,
 };
 
 const ONLINE_COMPENSATION = {
@@ -103,6 +105,7 @@ function emptyInput() {
     hit: false,
     special: false,
     aim: 0,
+    hitHold: 0,
     shotUp: false,
     shotDown: false,
     rttMs: ONLINE_COMPENSATION.defaultRttMs,
@@ -172,6 +175,7 @@ function makeRoom(id) {
     themeIndex: 0,
     result: null,
     lastBroadcast: 0,
+    pendingBroadcast: false,
     ballHistory: [],
     debugMiss: {
       p1: { key: "", at: 0 },
@@ -369,8 +373,8 @@ function updateRoom(room, dt, now) {
   }
 
   if (now - room.lastBroadcast >= BROADCAST_MS) {
-    broadcastRoom(room);
     room.lastBroadcast = now;
+    room.pendingBroadcast = true;
   }
 }
 
@@ -500,6 +504,7 @@ function tryControlledHit(room, playerId, side, now) {
 
   input.hitUntil = 0;
   input.specialUntil = 0;
+  input.hitHold = 0;
   room.lastHit = playerId;
   room.rallyHits += 1;
   room.maxRally = Math.max(room.maxRally, room.rallyHits);
@@ -654,6 +659,10 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
+function normalizedHitHold(input) {
+  return clamp(Number(input?.hitHold) || 0, 0, 1.2);
+}
+
 function hitQuality(ball, actor) {
   const dx = Math.abs(ball.x - actor.x) / PLAYER.hitRadiusX;
   const dy = Math.abs(ball.y - actor.y) / PLAYER.hitRadiusY;
@@ -667,7 +676,14 @@ function chooseShot(input, useSpecial) {
   if (useSpecial) return SHOTS.special;
   if (input.shotUp || (!("shotUp" in input) && input.up)) return SHOTS.lob;
   if (input.shotDown || (!("shotDown" in input) && input.down)) return SHOTS.drop;
-  if (input.hit && Math.abs(input.aim) > 0.72) return SHOTS.power;
+  const charge = clamp(normalizedHitHold(input) / PLAYER.chargeTime, 0, 1);
+  if (input.hit && charge > PLAYER.powerThreshold) {
+    return {
+      ...SHOTS.power,
+      time: lerp(SHOTS.normal.time, SHOTS.power.time, charge),
+      error: lerp(SHOTS.normal.error, SHOTS.power.error, charge),
+    };
+  }
   return SHOTS.normal;
 }
 
@@ -794,6 +810,7 @@ function publicPlayer(player) {
 }
 
 function broadcastRoom(room) {
+  room.pendingBroadcast = false;
   const state = snapshotRoom(room);
   for (const client of room.clients.values()) {
     sendJson(client, state);
@@ -803,8 +820,16 @@ function broadcastRoom(room) {
 // Broadcast immediately (key events: hit, serve, point end) instead of
 // waiting for the next BROADCAST_MS slot.
 function broadcastNow(room) {
+  room.pendingBroadcast = false;
   room.lastBroadcast = Date.now();
   broadcastRoom(room);
+}
+
+function flushPendingBroadcasts() {
+  for (const room of rooms.values()) {
+    if (!room.pendingBroadcast) continue;
+    broadcastRoom(room);
+  }
 }
 
 function handleMessage(client, raw) {
@@ -868,20 +893,27 @@ function handleMessage(client, raw) {
 
     let hitUntil = previous.hitUntil || 0;
     let specialUntil = previous.specialUntil || 0;
+    let hitHold = now <= hitUntil ? normalizedHitHold(previous) : 0;
     for (const entry of fresh) {
-      if (entry.input.hit) hitUntil = Math.max(hitUntil, now + compensation.hitGraceMs);
+      if (entry.input.hit) {
+        hitUntil = Math.max(hitUntil, now + compensation.hitGraceMs);
+        hitHold = Math.max(hitHold, normalizedHitHold(entry.input));
+      }
       if (entry.input.special) specialUntil = Math.max(specialUntil, now + compensation.hitGraceMs);
     }
     const newest = fresh[fresh.length - 1];
     const latest = newest.input;
+    const latestHit = !!latest.hit;
+    if (!latestHit && now > hitUntil) hitHold = 0;
     room.inputs[client.playerId] = {
       left: !!latest.left,
       right: !!latest.right,
       up: !!latest.up,
       down: !!latest.down,
-      hit: !!latest.hit,
+      hit: latestHit,
       special: !!latest.special,
       aim: clamp(Number(latest.aim) || 0, -1, 1),
+      hitHold,
       shotUp: !!latest.shotUp,
       shotDown: !!latest.shotDown,
       rttMs,
@@ -1099,6 +1131,7 @@ setInterval(() => {
       updateRoom(room, TICK_MS / 1000, stepNow);
     }
   }
+  flushPendingBroadcasts();
 }, TICK_MS);
 
 setInterval(() => {
