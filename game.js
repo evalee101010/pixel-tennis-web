@@ -63,6 +63,7 @@ const TUNING = {
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+const roomCodeNativeInput = document.getElementById("room-code-native-input");
 ctx.imageSmoothingEnabled = false;
 
 const W = canvas.width;
@@ -1585,6 +1586,7 @@ function tryTwoPlayerSetupClick(p) {
   if (pointInRect(p, layout.input)) {
     if (APP_FLOW.twoPlayerChoice === 0) APP_FLOW.twoPlayerChoice = 1;
     APP_FLOW.roomCodeMode = "join";
+    focusRoomCodeNativeInput(layout.input);
     return true;
   }
   return false;
@@ -1698,18 +1700,94 @@ function normalizeRoomCodeInput(value) {
   return String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
 }
 
+function syncRoomCodeNativeValue() {
+  if (!roomCodeNativeInput) return;
+  const code = normalizeRoomCodeInput(APP_FLOW.roomCodeInput);
+  if (roomCodeNativeInput.value !== code) roomCodeNativeInput.value = code;
+}
+
+function positionRoomCodeNativeInput(box) {
+  if (!roomCodeNativeInput || !box) return;
+  const rect = canvas.getBoundingClientRect();
+  const left = rect.left + (box.x / W) * rect.width;
+  const top = rect.top + (box.y / H) * rect.height;
+  const width = (box.width / W) * rect.width;
+  const height = (box.height / H) * rect.height;
+  roomCodeNativeInput.style.left = `${Math.round(left)}px`;
+  roomCodeNativeInput.style.top = `${Math.round(top)}px`;
+  roomCodeNativeInput.style.width = `${Math.round(width)}px`;
+  roomCodeNativeInput.style.height = `${Math.round(height)}px`;
+}
+
+function focusRoomCodeNativeInput(box) {
+  if (!roomCodeNativeInput) return;
+  APP_FLOW.roomCodeMode = "join";
+  syncRoomCodeNativeValue();
+  positionRoomCodeNativeInput(box);
+  roomCodeNativeInput.classList.add("room-code-native-input--active");
+  try {
+    roomCodeNativeInput.focus({ preventScroll: true });
+  } catch {
+    roomCodeNativeInput.focus();
+  }
+  const end = roomCodeNativeInput.value.length;
+  try {
+    roomCodeNativeInput.setSelectionRange(end, end);
+  } catch {
+    // Some mobile keyboards do not expose selection APIs for every input mode.
+  }
+}
+
+function blurRoomCodeNativeInput() {
+  if (!roomCodeNativeInput) return;
+  roomCodeNativeInput.classList.remove("room-code-native-input--active");
+  roomCodeNativeInput.style.left = "0px";
+  roomCodeNativeInput.style.top = "0px";
+  roomCodeNativeInput.style.width = "1px";
+  roomCodeNativeInput.style.height = "1px";
+  if (document.activeElement === roomCodeNativeInput) roomCodeNativeInput.blur();
+}
+
 function appendRoomCodeInput(key) {
   if (!/^[a-z0-9]$/i.test(key)) return false;
   APP_FLOW.roomCodeInput = normalizeRoomCodeInput(`${APP_FLOW.roomCodeInput}${key}`);
+  syncRoomCodeNativeValue();
   if (APP_FLOW.twoPlayerChoice === 0) APP_FLOW.twoPlayerChoice = 1;
   return true;
 }
 
 function trimRoomCodeInput() {
   APP_FLOW.roomCodeInput = APP_FLOW.roomCodeInput.slice(0, -1);
+  syncRoomCodeNativeValue();
+}
+
+if (roomCodeNativeInput) {
+  roomCodeNativeInput.addEventListener("input", () => {
+    const code = normalizeRoomCodeInput(roomCodeNativeInput.value);
+    APP_FLOW.roomCodeInput = code;
+    if (roomCodeNativeInput.value !== code) roomCodeNativeInput.value = code;
+    if (APP_FLOW.twoPlayerChoice === 0) APP_FLOW.twoPlayerChoice = 1;
+    APP_FLOW.roomCodeMode = "join";
+  });
+  roomCodeNativeInput.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    const key = keyCode(event.key);
+    if (!isTwoPlayerSetupOpen()) return;
+    if (key === "enter") {
+      event.preventDefault();
+      runSelectedTwoPlayerSetupChoice();
+    } else if (key === "escape") {
+      event.preventDefault();
+      returnToModeSelect();
+    }
+  });
+  roomCodeNativeInput.addEventListener("blur", () => {
+    roomCodeNativeInput.classList.remove("room-code-native-input--active");
+  });
 }
 
 function startOnePlayerMode() {
+  blurRoomCodeNativeInput();
   APP_FLOW.screen = "game";
   APP_FLOW.selectedMode = "onePlayer";
   APP_FLOW.pauseMenuOpen = false;
@@ -1720,6 +1798,7 @@ function startOnePlayerMode() {
 }
 
 function startTwoPlayerMode(roomCode = "") {
+  blurRoomCodeNativeInput();
   const normalizedRoomCode = normalizeRoomCodeInput(roomCode);
   APP_FLOW.selectedMode = "twoPlayer";
   APP_FLOW.pauseMenuOpen = false;
@@ -1751,6 +1830,7 @@ function startTwoPlayerMode(roomCode = "") {
 }
 
 function returnToModeSelect() {
+  blurRoomCodeNativeInput();
   APP_FLOW.screen = "menu";
   APP_FLOW.pauseMenuOpen = false;
   APP_FLOW.selectedMode = "onePlayer";
@@ -4017,6 +4097,10 @@ function drawTwoPlayerSetupScreen() {
     drawTwoPlayerSetupCard(card, index === activeChoice, index);
   });
   drawRoomCodeInput(layout.input);
+  if (roomCodeNativeInput?.classList.contains("room-code-native-input--active")) {
+    syncRoomCodeNativeValue();
+    positionRoomCodeNativeInput(layout.input);
+  }
   ctx.restore();
 }
 
