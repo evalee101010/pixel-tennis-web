@@ -12,6 +12,7 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "0.0.0.0";
 const TICK_MS = 1000 / 60;
 const BROADCAST_MS = 1000 / 24;
+const INPUT_STALE_MS = 260;
 const HEARTBEAT_MS = Number(process.env.HEARTBEAT_MS || 30000);
 // Number of selectable court themes. MUST stay in sync with THEMES.length in game.js.
 const THEME_COUNT = 4;
@@ -105,6 +106,8 @@ function emptyInput() {
     hit: false,
     special: false,
     aim: 0,
+    moveX: 0,
+    moveY: 0,
     hitHold: 0,
     shotUp: false,
     shotDown: false,
@@ -350,8 +353,8 @@ function updateRoom(room, dt, now) {
     syncRoomReadiness(room);
     return;
   }
-  updatePlayer(room.players.p1, room.inputs.p1, 1, dt);
-  updatePlayer(room.players.p2, room.inputs.p2, -1, dt);
+  updatePlayer(room.players.p1, room.inputs.p1, 1, dt, now);
+  updatePlayer(room.players.p2, room.inputs.p2, -1, dt, now);
   room.players.p1.cooldown = Math.max(0, room.players.p1.cooldown - dt);
   room.players.p2.cooldown = Math.max(0, room.players.p2.cooldown - dt);
 
@@ -378,9 +381,17 @@ function updateRoom(room, dt, now) {
   }
 }
 
-function updatePlayer(player, input, side, dt) {
-  let ix = (input.right ? 1 : 0) - (input.left ? 1 : 0);
-  let iy = (input.down ? 1 : 0) - (input.up ? 1 : 0);
+function normalizedMoveAxis(input, axis) {
+  const value = Number(input?.[axis]);
+  return Number.isFinite(value) ? clamp(value, -1, 1) : null;
+}
+
+function updatePlayer(player, input, side, dt, now) {
+  const stale = !input.inputAt || now - input.inputAt > INPUT_STALE_MS;
+  const moveX = normalizedMoveAxis(input, "moveX");
+  const moveY = normalizedMoveAxis(input, "moveY");
+  let ix = stale ? 0 : moveX ?? ((input.right ? 1 : 0) - (input.left ? 1 : 0));
+  let iy = stale ? 0 : moveY ?? ((input.down ? 1 : 0) - (input.up ? 1 : 0));
   const mag = Math.hypot(ix, iy);
   if (mag > 1) {
     ix /= mag;
@@ -905,14 +916,22 @@ function handleMessage(client, raw) {
     const latest = newest.input;
     const latestHit = !!latest.hit;
     if (!latestHit && now > hitUntil) hitHold = 0;
+    const left = !!latest.left;
+    const right = !!latest.right;
+    const up = !!latest.up;
+    const down = !!latest.down;
+    const moveX = normalizedMoveAxis(latest, "moveX") ?? ((right ? 1 : 0) - (left ? 1 : 0));
+    const moveY = normalizedMoveAxis(latest, "moveY") ?? ((down ? 1 : 0) - (up ? 1 : 0));
     room.inputs[client.playerId] = {
-      left: !!latest.left,
-      right: !!latest.right,
-      up: !!latest.up,
-      down: !!latest.down,
+      left,
+      right,
+      up,
+      down,
       hit: latestHit,
       special: !!latest.special,
       aim: clamp(Number(latest.aim) || 0, -1, 1),
+      moveX,
+      moveY,
       hitHold,
       shotUp: !!latest.shotUp,
       shotDown: !!latest.shotDown,

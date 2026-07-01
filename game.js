@@ -894,11 +894,22 @@ function sendOnline(payload) {
 }
 
 function onlineInputPayload() {
+  let moveX = (input.right ? 1 : 0) - (input.left ? 1 : 0) + input.stick.x;
+  let moveY = (input.down ? 1 : 0) - (input.up ? 1 : 0) + input.stick.y;
+  const mag = Math.hypot(moveX, moveY);
+  if (mag > 1) {
+    moveX /= mag;
+    moveY /= mag;
+  }
+  moveX = clamp(moveX, -1, 1);
+  moveY = clamp(moveY, -1, 1);
   const local = {
-    left: input.left || input.stick.x < -0.25,
-    right: input.right || input.stick.x > 0.25,
-    up: input.up || input.stick.y < -0.25,
-    down: input.down || input.stick.y > 0.25,
+    left: moveX < -0.25,
+    right: moveX > 0.25,
+    up: moveY < -0.25,
+    down: moveY > 0.25,
+    moveX,
+    moveY,
     hit: input.hit || input.hitQueued,
     special: input.queuedSpecial,
     aim: clamp(input.aim, -1, 1),
@@ -914,6 +925,8 @@ function onlineInputPayload() {
     right: local.left,
     up: local.down,
     down: local.up,
+    moveX: -local.moveX,
+    moveY: -local.moveY,
     aim: -local.aim,
   };
 }
@@ -922,6 +935,8 @@ function inputPayloadKey(payload) {
   return [
     payload.left, payload.right, payload.up, payload.down,
     payload.hit, payload.special, payload.shotUp, payload.shotDown,
+    Math.round((payload.moveX || 0) * 20),
+    Math.round((payload.moveY || 0) * 20),
     Math.round((payload.aim || 0) * 20),
     Math.round((payload.hitHold || 0) * 20),
   ].join(",");
@@ -1109,8 +1124,12 @@ function netPredictLocal(dt) {
   const localId = ONLINE.playerId;
   const actor = localId === "p1" ? player : ai;
   const payload = onlineInputPayload(); // already in server coordinates
-  let ix = (payload.right ? 1 : 0) - (payload.left ? 1 : 0);
-  let iy = (payload.down ? 1 : 0) - (payload.up ? 1 : 0);
+  let ix = Number.isFinite(Number(payload.moveX))
+    ? clamp(Number(payload.moveX), -1, 1)
+    : (payload.right ? 1 : 0) - (payload.left ? 1 : 0);
+  let iy = Number.isFinite(Number(payload.moveY))
+    ? clamp(Number(payload.moveY), -1, 1)
+    : (payload.down ? 1 : 0) - (payload.up ? 1 : 0);
   const mag = Math.hypot(ix, iy);
   if (mag > 1) {
     ix /= mag;
@@ -2228,6 +2247,12 @@ canvas.addEventListener("pointermove", (event) => {
 
 canvas.addEventListener("pointerup", releasePointer);
 canvas.addEventListener("pointercancel", releasePointer);
+window.addEventListener("pointerup", releasePointer);
+window.addEventListener("pointercancel", releasePointer);
+window.addEventListener("blur", releaseAllPointerInput);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseAllPointerInput();
+});
 
 function releasePointer(event) {
   if (event.pointerId === input.stickPointerId) {
@@ -2240,6 +2265,15 @@ function releasePointer(event) {
     input.hit = false;
     input.hitArmed = true;
   }
+}
+
+function releaseAllPointerInput() {
+  input.stickPointerId = null;
+  input.pointerId = null;
+  input.stick.x = 0;
+  input.stick.y = 0;
+  input.hit = false;
+  input.hitArmed = true;
 }
 
 function releaseTapInput() {
